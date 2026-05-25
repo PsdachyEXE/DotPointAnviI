@@ -1,17 +1,10 @@
-color_schemes:
-- name: Default
-  colors: []
-
-roles: []
-
 assets: []
-
-vars: {}
-
-spacing: {}
-
 breakpoints: {}
-
+color_schemes:
+- colors: []
+  name: Default
 fonts: []
-
+roles: []
 sections: {}
+spacing: {}
+vars: {}

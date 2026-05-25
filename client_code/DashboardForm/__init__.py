@@ -1,3 +1,6 @@
+import anvil.tables as tables
+import anvil.tables.query as q
+from anvil.tables import app_tables
 """DashboardForm - all-in-view three-panel dashboard (FR06, FR07, FR08, FR09, FR21).
 
 Implementation pending - see IMPLEMENTATION_SPEC.md section 3 (DashboardForm).

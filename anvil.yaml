@@ -1,46 +1,26 @@
-package_name: DotPoint
 allow_embedding: false
-metadata:
-  title: DotPoint
-  description: Assessment tracker for VCE students (Anvil port of C:\Coding\DotPoint)
-
-runtime_options:
-  version: 2
-  client_version: '3'
-  server_version: python3-full
-  server_spec:
-    base: python310-full
-
-services:
-- source: /runtime/services/tables.yml
-  client_config: {}
-  server_config:
-    auto_create_missing_columns: false
-- source: /runtime/services/anvil/users.yml
-  client_config:
-    use_email: true
-    allow_remembered_logins: true
-    allow_signups: true
-    enable_automatically: true
-    confirm_email: false
-    remember_me_days: 7
-    use_mfa: false
-    share_login_status: true
-    require_secure_passwords: true
-    n_password_failures: 10
-    use_token: true
-    enable_password_reset_email: true
-  server_config: {}
-
-startup:
-  type: form
-  module: LoginForm
-
-scheduled_tasks: []
-
+db_schema:
+  table_1:
+    client: none
+    columns: []
+    indexes: []
+    server: full
+    title: Table 1
 dependencies: []
-
-native_deps:
-  head_html: ''
-
-db_schema: []
+metadata: {description: 'Assessment tracker for VCE students (Anvil port of C:\Coding\DotPoint)', title: DotPoint}
+native_deps: {head_html: ''}
+package_name: DotPoint
+runtime_options:
+  client_version: '3'
+  server_spec: {base: python310-full}
+  server_version: python3-full
+  version: 2
+scheduled_tasks: []
+services:
+- client_config: {}
+  server_config: {auto_create_missing_columns: false}
+  source: /runtime/services/tables.yml
+- client_config: {allow_remembered_logins: true, allow_signups: true, confirm_email: false, enable_automatically: true, enable_password_reset_email: true, n_password_failures: 10, remember_me_days: 7, require_secure_passwords: true, share_login_status: true, use_email: true, use_mfa: false, use_token: true}
+  server_config: {}
+  source: /runtime/services/anvil/users.yml
+startup: {module: LoginForm, type: form}

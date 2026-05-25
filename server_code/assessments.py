@@ -1,3 +1,6 @@
+import anvil.tables as tables
+import anvil.tables.query as q
+from anvil.tables import app_tables
 """Assessment CRUD plus bulk import, list, and export/import server module.
 
 Exposes: create_assessment, create_bulk_assessments, update_assessment,

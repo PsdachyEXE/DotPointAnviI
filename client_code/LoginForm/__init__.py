@@ -1,3 +1,6 @@
+import anvil.tables as tables
+import anvil.tables.query as q
+from anvil.tables import app_tables
 """LoginForm - gate the app behind Anvil Users authentication (FR20).
 
 Implementation pending - see IMPLEMENTATION_SPEC.md section 3 (LoginForm)
