@@ -71,12 +71,99 @@ db_schema:
     indexes: []
     server: full
     title: assessments
-  table_3:
+  notes:
     client: none
-    columns: []
+    columns:
+    - admin_ui: {order: 0, width: 200}
+      client_hidden: false
+      name: title
+      type: string
+    - admin_ui: {order: 1, width: 200}
+      client_hidden: false
+      name: content
+      type: string
+    - admin_ui: {order: 2, width: 200}
+      client_hidden: false
+      name: tags
+      type: simpleObject
+    - admin_ui: {order: 3, width: 200}
+      client_hidden: false
+      name: is_pinned
+      type: bool
+    - admin_ui: {order: 4, width: 200}
+      client_hidden: false
+      name: user
+      target: users
+      type: link_single
+    - admin_ui: {order: 5, width: 200}
+      client_hidden: false
+      name: created_at
+      type: datetime
+    - admin_ui: {order: 6, width: 200}
+      client_hidden: false
+      name: updated_at
+      type: datetime
     indexes: []
     server: full
-    title: Table 3
+    title: notes
+  reminder_logs:
+    client: none
+    columns:
+    - admin_ui: {order: 0, width: 200}
+      client_hidden: false
+      name: assessment_id
+      type: string
+    - admin_ui: {order: 1, width: 200}
+      client_hidden: false
+      name: user
+      target: users
+      type: link_single
+    - admin_ui: {order: 2, width: 200}
+      client_hidden: false
+      name: sent_date
+      type: date
+    - admin_ui: {order: 3, width: 200}
+      client_hidden: false
+      name: reminder_type
+      type: string
+    indexes: []
+    server: full
+    title: reminder_logs
+  user_settings:
+    client: none
+    columns:
+    - admin_ui: {order: 0, width: 200}
+      client_hidden: false
+      name: user
+      target: users
+      type: link_single
+    - admin_ui: {order: 1, width: 200}
+      client_hidden: false
+      name: theme
+      type: string
+    - admin_ui: {order: 2, width: 200}
+      client_hidden: false
+      name: default_reminder_days
+      type: simpleObject
+    - admin_ui: {order: 3, width: 200}
+      client_hidden: false
+      name: notifications_enabled
+      type: bool
+    - admin_ui: {order: 4, width: 200}
+      client_hidden: false
+      name: school_year
+      type: number
+    - admin_ui: {order: 5, width: 200}
+      client_hidden: false
+      name: school_terms
+      type: simpleObject
+    - admin_ui: {order: 6, width: 200}
+      client_hidden: false
+      name: timezone
+      type: string
+    indexes: []
+    server: full
+    title: user_settings
   users:
     client: none
     columns: []
