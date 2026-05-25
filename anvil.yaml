@@ -1,11 +1,82 @@
 allow_embedding: false
 db_schema:
-  table_1:
+  assessments:
+    client: none
+    columns:
+    - admin_ui: {order: 0, width: 200}
+      client_hidden: false
+      name: title
+      type: string
+    - admin_ui: {order: 1, width: 200}
+      client_hidden: true
+      name: subject
+      type: string
+    - admin_ui: {order: 2, width: 200}
+      client_hidden: false
+      name: type
+      type: string
+    - admin_ui: {order: 3, width: 200}
+      client_hidden: false
+      name: due_date
+      type: date
+    - admin_ui: {order: 4, width: 200}
+      client_hidden: false
+      name: start_date
+      type: date
+    - admin_ui: {order: 5, width: 200}
+      client_hidden: false
+      name: weight
+      type: number
+    - admin_ui: {order: 6, width: 200}
+      client_hidden: false
+      name: status
+      type: string
+    - admin_ui: {order: 7, width: 200}
+      client_hidden: false
+      name: description
+      type: string
+    - admin_ui: {order: 8, width: 200}
+      client_hidden: false
+      name: reminder_days
+      type: simpleObject
+    - admin_ui: {order: 9, width: 200}
+      client_hidden: false
+      name: linked_note_ids
+      type: simpleObject
+    - admin_ui: {order: 10, width: 200}
+      client_hidden: false
+      name: term_info
+      type: string
+    - admin_ui: {order: 11, width: 200}
+      client_hidden: false
+      name: confidence
+      type: string
+    - admin_ui: {order: 12, width: 200}
+      client_hidden: false
+      name: source_text
+      type: string
+    - admin_ui: {order: 13, width: 200}
+      client_hidden: false
+      name: user
+      target: users
+      type: link_single
+    - admin_ui: {order: 14, width: 200}
+      client_hidden: false
+      name: created_at
+      type: datetime
+    - admin_ui: {order: 15, width: 200}
+      client_hidden: false
+      name: updated_at
+      type: datetime
+    indexes: []
+    server: full
+    title: assessments
+  users:
     client: none
     columns: []
     indexes: []
     server: full
-    title: Table 1
+    title: users
 dependencies: []
 metadata: {description: 'Assessment tracker for VCE students (Anvil port of C:\Coding\DotPoint)', title: DotPoint}
 native_deps: {head_html: ''}
