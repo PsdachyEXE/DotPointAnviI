@@ -208,6 +208,10 @@ runtime_options:
   server_version: python3-full
   version: 2
 scheduled_tasks: []
+secrets:
+  DEV_EMAIL:
+    type: secret
+    value: {MTQOPIOCMH5RWV5A: A7t18hi7eqY7iOMhdeywj02PrgM7KeI7SvjzNGkkpq2UlSGDLOUearRBzaOmhUeKhh9CRIxKtL5iGLZp7AeMNKyI1oaZEe7mq/yGSDdqj1ZCG8Ffs0Aj7hoDSSXUazQFvnQWBj6qVjj7b+awRKbAzXU0LWU+mUdX}
 services:
 - client_config: {}
   server_config: {auto_create_missing_columns: false}
