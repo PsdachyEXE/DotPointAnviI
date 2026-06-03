@@ -99,30 +99,30 @@ Every `@anvil.server.callable` function declares argument and return types using
 - `ValueError` — input validation failure (weight out of range, invalid enum, etc.).
 - `anvil.tables.TableError` — Anvil row not found / type mismatch (Anvil-raised, not authored here).
 
----
-
 ## 1. Data Tables
+
+> **Indexes deferred** — Data Table Indexes are an Anvil Business-only feature. All `indexed` annotations have been removed. Re-evaluate if any table exceeds ~10,000 rows in production; DotPoint is not expected to approach this threshold.
 
 ### Table: `assessments`
 
-| Column | Anvil type | Required | Default | Indexed | Notes |
-|---|---|---|---|---|---|
-| `title` | text | yes | — | no | Max 200 chars (validated server-side) |
-| `subject` | text | yes | — | yes | Must be a value from `SUBJECT_ALIASES.values()` |
-| `type` | text | yes | — | yes | Enum: `'sac' \| 'sat' \| 'exam' \| 'project' \| 'homework' \| 'other'` |
-| `due_date` | date | yes | — | yes | |
-| `start_date` | date | no | None | no | |
-| `weight` | number | no | None | no | Float, 0.0 ≤ weight ≤ 100.0 |
-| `status` | text | yes | `'not_started'` | yes | Enum: `'not_started' \| 'in_progress' \| 'completed'` |
-| `description` | text | no | None | no | |
-| `reminder_days` | simpleObject | yes | `[7, 2]` | no | `list[int]`; each value > 0 |
-| `linked_note_ids` | simpleObject | yes | `[]` | no | `list[str]`; each value is a note row ID (Anvil `get_id()`) |
-| `term_info` | text | no | None | no | Audit string e.g. `"Term 1, Week 4B"` |
-| `confidence` | text | no | None | no | **Pending Decision 1.** Enum: `'HIGH' \| 'MEDIUM' \| 'LOW' \| None` |
-| `source_text` | text | no | None | no | **Pending Decision 1.** Raw parser input; `None` for manual entries |
-| `user` | link to row (Users) | yes | `anvil.users.get_user()` | yes | Set on insert; never edited |
-| `created_at` | datetime | yes | server now (UTC) | yes | Set on insert |
-| `updated_at` | datetime | yes | server now (UTC) | yes | Reset on every update |
+| Column | Anvil type | Required | Default | Notes |
+|---|---|---|---|---|
+| `title` | text | yes | — | Max 200 chars (validated server-side) |
+| `subject` | text | yes | — | Must be a value from `SUBJECT_ALIASES.values()` |
+| `type` | text | yes | — | Enum: `'sac' \| 'sat' \| 'exam' \| 'project' \| 'homework' \| 'other'` |
+| `due_date` | date | yes | — | |
+| `start_date` | date | no | None | |
+| `weight` | number | no | None | Float, 0.0 ≤ weight ≤ 100.0 |
+| `status` | text | yes | `'not_started'` | Enum: `'not_started' \| 'in_progress' \| 'completed'` |
+| `description` | text | no | None | |
+| `reminder_days` | simpleObject | yes | `[7, 2]` | `list[int]`; each value > 0 |
+| `linked_note_ids` | simpleObject | yes | `[]` | `list[str]`; each value is a note row ID (Anvil `get_id()`) |
+| `term_info` | text | no | None | Audit string e.g. `"Term 1, Week 4B"` |
+| `confidence` | text | no | None | **Pending Decision 1.** Enum: `'HIGH' \| 'MEDIUM' \| 'LOW' \| None` |
+| `source_text` | text | no | None | **Pending Decision 1.** Raw parser input; `None` for manual entries |
+| `user` | link to row (Users) | yes | `anvil.users.get_user()` | Set on insert; never edited |
+| `created_at` | datetime | yes | server now (UTC) | Set on insert |
+| `updated_at` | datetime | yes | server now (UTC) | Reset on every update |
 
 - **Relations**: `user` → built-in Users table; `linked_note_ids` → `notes.<row id>` (resolved app-side, no Anvil link).
 - **Access**: Form Server only. No client-side `app_tables` access. All reads/writes via server functions in `assessments.py` and `dashboard.py`.
@@ -130,15 +130,15 @@ Every `@anvil.server.callable` function declares argument and return types using
 
 ### Table: `notes`
 
-| Column | Anvil type | Required | Default | Indexed | Notes |
-|---|---|---|---|---|---|
-| `title` | text | yes | — | no | Max 200 chars |
-| `content` | text | yes | `''` | no | Markdown; rendered with markdown library client-side |
-| `tags` | simpleObject | yes | `[]` | no | `list[str]`; case-preserved, comparisons case-insensitive |
-| `is_pinned` | bool | yes | `False` | yes | |
-| `user` | link to row (Users) | yes | `anvil.users.get_user()` | yes | |
-| `created_at` | datetime | yes | server now (UTC) | yes | |
-| `updated_at` | datetime | yes | server now (UTC) | yes | |
+| Column | Anvil type | Required | Default | Notes |
+|---|---|---|---|---|
+| `title` | text | yes | — | Max 200 chars |
+| `content` | text | yes | `''` | Markdown; rendered with markdown library client-side |
+| `tags` | simpleObject | yes | `[]` | `list[str]`; case-preserved, comparisons case-insensitive |
+| `is_pinned` | bool | yes | `False` | |
+| `user` | link to row (Users) | yes | `anvil.users.get_user()` | |
+| `created_at` | datetime | yes | server now (UTC) | |
+| `updated_at` | datetime | yes | server now (UTC) | |
 
 - **Note on `content`**: Solution Analysis specifies markdown (UC5 data dictionary). Inventory §3 NoteEditor intent annotation claims "plain-text only per SRS constraint" — this contradicts the Solution Analysis and the existing code (which uses `react-markdown`). Solution Analysis is canonical per the spec mandate; markdown stands. Field name is `content`, not `body`.
 - **Access**: Form Server only. All access via `notes.py`.
@@ -146,15 +146,15 @@ Every `@anvil.server.callable` function declares argument and return types using
 
 ### Table: `user_settings`
 
-| Column | Anvil type | Required | Default | Indexed | Notes |
-|---|---|---|---|---|---|
-| `user` | link to row (Users) | yes | — | yes (unique) | One row per user; created on first login |
-| `theme` | text | yes | `'dark'` | no | Enum: `'light' \| 'dark'`. No UI control in MVP (column exists for FR-S01 stretch) |
-| `default_reminder_days` | simpleObject | yes | `[7, 2]` | no | `list[int]` |
-| `notifications_enabled` | bool | yes | `True` | yes | Master gate for `reminders.run_reminder_check` |
-| `school_year` | number | no | None | no | Integer, e.g. `2026` |
-| `school_terms` | simpleObject | no | `[]` | no | `list[dict]`: each `{'term': int, 'start_date': 'YYYY-MM-DD', 'end_date': 'YYYY-MM-DD'}` |
-| `timezone` | text | yes | `'Australia/Melbourne'` | no | **Pending Decision 2.** IANA name |
+| Column | Anvil type | Required | Default | Notes |
+|---|---|---|---|---|
+| `user` | link to row (Users) | yes | — | One row per user; created on first login. **Uniqueness was previously enforced by a unique index; now enforced exclusively by the `_get_or_create_settings(user)` helper — see callout below.** |
+| `theme` | text | yes | `'dark'` | Enum: `'light' \| 'dark'`. No UI control in MVP (column exists for FR-S01 stretch) |
+| `default_reminder_days` | simpleObject | yes | `[7, 2]` | `list[int]` |
+| `notifications_enabled` | bool | yes | `True` | Master gate for `reminders.run_reminder_check` |
+| `school_year` | number | no | None | Integer, e.g. `2026` |
+| `school_terms` | simpleObject | no | `[]` | `list[dict]`: each `{'term': int, 'start_date': 'YYYY-MM-DD', 'end_date': 'YYYY-MM-DD'}` |
+| `timezone` | text | yes | `'Australia/Melbourne'` | **Pending Decision 2.** IANA name |
 
 - **Singleton per user**: enforced by `_get_or_create_settings(user)` helper in `notes.py` (or wherever first needed); never two rows for the same user.
 - **Access**: Form Server only.
@@ -162,12 +162,12 @@ Every `@anvil.server.callable` function declares argument and return types using
 
 ### Table: `reminder_logs`
 
-| Column | Anvil type | Required | Default | Indexed | Notes |
-|---|---|---|---|---|---|
-| `assessment_id` | text | yes | — | yes | **Pending Decision 3.** Stores `assessment_row.get_id()`; not a link-to-row |
-| `user` | link to row (Users) | yes | — | yes | |
-| `sent_date` | date | yes | — | yes | User-local date the email was sent |
-| `reminder_type` | text | yes | — | yes | Format: `'{N}_day'`, e.g. `'7_day'`, `'2_day'` |
+| Column | Anvil type | Required | Default | Notes |
+|---|---|---|---|---|
+| `assessment_id` | text | yes | — | **Pending Decision 3.** Stores `assessment_row.get_id()`; not a link-to-row |
+| `user` | link to row (Users) | yes | — | |
+| `sent_date` | date | yes | — | User-local date the email was sent |
+| `reminder_type` | text | yes | — | Format: `'{N}_day'`, e.g. `'7_day'`, `'2_day'` |
 
 - **Dedup key (logical, enforced in app code, not by Anvil)**: `(assessment_id, user, reminder_type)`. `sent_date` is stored for audit but is not part of the key.
 - **Insert-only**: rows are never updated or deleted. No 30-day TTL cleanup (the current code's `cleanupOldReminderLogs` is dropped — see §8).
@@ -175,6 +175,17 @@ Every `@anvil.server.callable` function declares argument and return types using
 - **Migration**: None.
 
 ---
+
+## Note on `user_settings` uniqueness
+
+The `user_settings.user` column originally had `indexed: yes (unique)`. The "unique" part was doing real work — it was a database-level guarantee that you can never have two settings rows for the same user, even if your app code has a race condition or a bug. Without it, you're relying entirely on `_get_or_create_settings(user)` being correct, atomic, and the only code path that ever inserts into `user_settings`.
+
+For a single-user app this is fine in practice. Required mitigations:
+
+1. Make `_get_or_create_settings(user)` the **only** function that ever calls `app_tables.user_settings.add_row(...)`. No other code path inserts. Enforce this by convention and a code-review pass.
+2. Inside that helper, do `search → if exists return → else add_row`. Be aware Anvil server modules don't give you true transactional isolation across this read-then-write, so two concurrent first-logins for the same user could theoretically both pass the search and both insert. Risk is negligible for this use case, but acknowledged here.
+3. Add a server-side sanity-check function (e.g. `assert_settings_integrity()`) that searches for duplicate `user_settings` rows and logs if any exist. Run manually during dev as cheap insurance.
+
 
 ## 2. Server Modules
 
