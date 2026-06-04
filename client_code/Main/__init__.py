@@ -48,14 +48,14 @@ class Main(ColumnPanel):
 
         if user is None:
             if hash_value != 'login':
-                anvil.set_url_hash('login', set_in_history=False)
+                anvil.set_url_hash('login')
             self._render('LoginForm')
             return
 
         target = _ROUTES.get(hash_value, 'DashboardForm')
         if target == 'LoginForm':
             # Already authenticated; don't show the login screen.
-            anvil.set_url_hash('dashboard', set_in_history=False)
+            anvil.set_url_hash('dashboard')
             target = 'DashboardForm'
         self._render(target)
 

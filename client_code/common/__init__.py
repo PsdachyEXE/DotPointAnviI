@@ -17,13 +17,13 @@ from anvil import FlowPanel, Link, Button, open_form
 
 def _navigate(hash_value):
     """Set the URL hash and re-enter the Main router (spec §4 navigation)."""
-    anvil.set_url_hash(hash_value, set_in_history=True)
+    anvil.set_url_hash(hash_value)
     open_form('Main')
 
 
 def _sign_out():
     anvil.users.logout()
-    anvil.set_url_hash('login', set_in_history=False)
+    anvil.set_url_hash('login')
     open_form('Main')
 
 

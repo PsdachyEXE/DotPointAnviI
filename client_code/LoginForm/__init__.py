@@ -40,5 +40,5 @@ class LoginForm(ColumnPanel):
         except Exception as e:
             Notification("Couldn't load your settings: %s" % e, style='warning').show()
 
-        anvil.set_url_hash('dashboard', set_in_history=False)
+        anvil.set_url_hash('dashboard')
         open_form('Main')
