@@ -141,14 +141,3 @@ def _is_iso_date(s: str) -> bool:
         return True
     except (ValueError, TypeError):
         return False
-
-
-# --- TEMPORARY DEBUG: probe server-side access to the users table.
-# Remove once the signup PermissionDenied is diagnosed.
-@anvil.server.callable
-def _debug_users_access() -> str:
-    try:
-        n = len(list(app_tables.users.search()))
-        return "OK: server searched users, count=%d" % n
-    except Exception as e:
-        return "%s: %s" % (type(e).__name__, e)
