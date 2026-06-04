@@ -3,77 +3,198 @@ db_schema:
   assessments:
     client: none
     columns:
-    - admin_ui: {order: 0, width: 200}
+    - admin_ui: {width: 200}
       client_hidden: false
       name: title
       type: string
-    - admin_ui: {order: 1, width: 200}
+    - admin_ui: {width: 200}
       client_hidden: true
       name: subject
       type: string
-    - admin_ui: {order: 2, width: 200}
+    - admin_ui: {width: 200}
       client_hidden: false
       name: type
       type: string
-    - admin_ui: {order: 3, width: 200}
+    - admin_ui: {width: 200}
       client_hidden: false
       name: due_date
       type: date
-    - admin_ui: {order: 4, width: 200}
+    - admin_ui: {width: 200}
       client_hidden: false
       name: start_date
       type: date
-    - admin_ui: {order: 5, width: 200}
+    - admin_ui: {width: 200}
       client_hidden: false
       name: weight
       type: number
-    - admin_ui: {order: 6, width: 200}
+    - admin_ui: {width: 200}
       client_hidden: false
       name: status
       type: string
-    - admin_ui: {order: 7, width: 200}
+    - admin_ui: {width: 200}
       client_hidden: false
       name: description
       type: string
-    - admin_ui: {order: 8, width: 200}
+    - admin_ui: {width: 200}
       client_hidden: false
       name: reminder_days
       type: simpleObject
-    - admin_ui: {order: 9, width: 200}
+    - admin_ui: {width: 200}
       client_hidden: false
       name: linked_note_ids
       type: simpleObject
-    - admin_ui: {order: 10, width: 200}
+    - admin_ui: {width: 200}
       client_hidden: false
       name: term_info
       type: string
-    - admin_ui: {order: 11, width: 200}
+    - admin_ui: {width: 200}
       client_hidden: false
       name: confidence
       type: string
-    - admin_ui: {order: 12, width: 200}
+    - admin_ui: {width: 200}
       client_hidden: false
       name: source_text
       type: string
-    - admin_ui: {order: 13, width: 200}
+    - admin_ui: {width: 200}
       client_hidden: false
       name: user
       target: users
       type: link_single
-    - admin_ui: {order: 14, width: 200}
+    - admin_ui: {width: 200}
       client_hidden: false
       name: created_at
       type: datetime
-    - admin_ui: {order: 15, width: 200}
+    - admin_ui: {width: 200}
       client_hidden: false
       name: updated_at
       type: datetime
     indexes: []
     server: full
     title: assessments
+  notes:
+    client: none
+    columns:
+    - admin_ui: {width: 200}
+      client_hidden: false
+      name: title
+      type: string
+    - admin_ui: {width: 200}
+      client_hidden: false
+      name: content
+      type: string
+    - admin_ui: {width: 200}
+      client_hidden: false
+      name: tags
+      type: simpleObject
+    - admin_ui: {width: 200}
+      client_hidden: false
+      name: is_pinned
+      type: bool
+    - admin_ui: {width: 200}
+      client_hidden: false
+      name: user
+      target: users
+      type: link_single
+    - admin_ui: {width: 200}
+      client_hidden: false
+      name: created_at
+      type: datetime
+    - admin_ui: {width: 200}
+      client_hidden: false
+      name: updated_at
+      type: datetime
+    indexes: []
+    server: full
+    title: notes
+  reminder_logs:
+    client: none
+    columns:
+    - admin_ui: {width: 200}
+      client_hidden: false
+      name: assessment_id
+      type: string
+    - admin_ui: {width: 200}
+      client_hidden: false
+      name: user
+      target: users
+      type: link_single
+    - admin_ui: {width: 200}
+      client_hidden: false
+      name: sent_date
+      type: date
+    - admin_ui: {width: 200}
+      client_hidden: false
+      name: reminder_type
+      type: string
+    indexes: []
+    server: full
+    title: reminder_logs
+  user_settings:
+    client: none
+    columns:
+    - admin_ui: {width: 200}
+      client_hidden: false
+      name: user
+      target: users
+      type: link_single
+    - admin_ui: {width: 200}
+      client_hidden: false
+      name: theme
+      type: string
+    - admin_ui: {width: 200}
+      client_hidden: false
+      name: default_reminder_days
+      type: simpleObject
+    - admin_ui: {width: 200}
+      client_hidden: false
+      name: notifications_enabled
+      type: bool
+    - admin_ui: {width: 200}
+      client_hidden: false
+      name: school_year
+      type: number
+    - admin_ui: {width: 200}
+      client_hidden: false
+      name: school_terms
+      type: simpleObject
+    - admin_ui: {width: 200}
+      client_hidden: false
+      name: timezone
+      type: string
+    indexes: []
+    server: full
+    title: user_settings
   users:
     client: none
-    columns: []
+    columns:
+    - admin_ui: {width: 200}
+      client_hidden: false
+      name: email
+      type: string
+    - admin_ui: {width: 200}
+      client_hidden: true
+      name: enabled
+      type: bool
+    - admin_ui: {width: 200}
+      client_hidden: true
+      name: last_login
+      type: datetime
+    - admin_ui: {width: 200}
+      client_hidden: true
+      name: password_hash
+      type: string
+    - admin_ui: {width: 200}
+      client_hidden: true
+      name: n_password_failures
+      type: number
+    - admin_ui: {width: 200}
+      client_hidden: true
+      name: remembered_logins
+      type: simpleObject
+    - admin_ui: {width: 200}
+      client_hidden: true
+      name: signed_up
+      type: datetime
     indexes: []
     server: full
     title: users
