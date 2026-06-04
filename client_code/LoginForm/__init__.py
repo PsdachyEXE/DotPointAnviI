@@ -3,10 +3,13 @@ import anvil.tables.query as q
 from anvil.tables import app_tables
 """LoginForm - gate the app behind Anvil Users authentication (FR20).
 
-Uses Anvil's built-in login/signup form (login_with_form). The signup option is
-enabled with show_signup_option=True (the Users service also has
-allow_signups: true). On success it ensures the user's settings row exists, then
-re-enters the Main router at #dashboard.
+Two explicit paths (both use Anvil's built-in forms):
+  - "Sign in"           -> anvil.users.login_with_form(...)
+  - "Create an account" -> anvil.users.signup_with_form(...)
+
+A dedicated signup button is used rather than relying on login_with_form's
+show_signup_option link, which does not render in this app even though the Users
+service has allow_signups: true. Both paths return a logged-in user on success.
 
 Layout note: this theme defines no custom roles, so title styling uses direct
 Label properties (font_size/bold/align) rather than role='display-1'.
@@ -31,20 +34,27 @@ class LoginForm(ColumnPanel):
                                  font_size=44, bold=True))
         self.add_component(Label(text='Assessment Tracker', align='center',
                                  font_size=18, foreground='#777777'))
-        self.add_component(Spacer(height=24))
+        self.add_component(Spacer(height=28))
 
         sign_in = Button(text='Sign in', role='primary', align='center')
         sign_in.set_event_handler('click', self._on_sign_in_click)
         self.add_component(sign_in)
 
+        self.add_component(Spacer(height=8))
+
+        sign_up = Button(text='Create an account', role='secondary', align='center')
+        sign_up.set_event_handler('click', self._on_sign_up_click)
+        self.add_component(sign_up)
+
     def _on_sign_in_click(self, **event_args):
-        # show_signup_option=True surfaces the "Sign up" link; allow_cancel lets
-        # the user dismiss the modal. (The spec's allow_signup kwarg is invalid.)
-        user = anvil.users.login_with_form(
-            allow_remembered=True,
-            show_signup_option=True,
-            allow_cancel=True,
-        )
+        user = anvil.users.login_with_form(allow_remembered=True, allow_cancel=True)
+        self._after_auth(user)
+
+    def _on_sign_up_click(self, **event_args):
+        user = anvil.users.signup_with_form(allow_cancel=True)
+        self._after_auth(user)
+
+    def _after_auth(self, user):
         if user is None:
             return  # dialog cancelled
 
