@@ -177,4 +177,4 @@ Without this secret, `trigger_reminder_check_now` will raise `PermissionError("d
 - [ ] `dateparser` listed in Python packages.
 - [ ] Scheduled task `run_reminder_check` configured (deferred until Workflow 5B).
 - [ ] `DEV_EMAIL` secret set.
-- [ ] `anvil.yaml` startup form is `LoginForm`.
+- [ ] `anvil.yaml` startup form is `Main` (the hash router; gates login vs. dashboard per §4). *(Was `LoginForm` before Workflow 5B slice 1.)*
