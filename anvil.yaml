@@ -196,7 +196,7 @@ db_schema:
       name: signed_up
       type: datetime
     indexes: []
-    server: none
+    server: full
     title: users
 dependencies: []
 metadata: {description: 'Assessment tracker for VCE students (Anvil port of C:\Coding\DotPoint)', title: DotPoint}
