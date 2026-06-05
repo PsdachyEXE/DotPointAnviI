@@ -1,26 +1,28 @@
 import anvil.tables as tables
 import anvil.tables.query as q
 from anvil.tables import app_tables
-"""LoginForm - gate the app behind Anvil Users authentication (FR20).
+"""LoginForm - gate the app behind authentication (FR20).
 
-Two explicit paths (both use Anvil's built-in forms):
-  - "Sign in"           -> anvil.users.login_with_form(...)
-  - "Create an account" -> anvil.users.signup_with_form(...)
+WORKAROUND: Anvil's client-initiated login_with_form / signup_with_form raise
+"PermissionDenied: Cannot access this table from server code" on the users table
+(a Users-service<->table binding issue surfaced after a schema resync). So this
+form uses a custom email/password dialog that calls trusted server-module
+callables (notes.sign_in_with_email / notes.create_account), which run with this
+app's full users-table access and sidestep that path. Revert to
+login_with_form/signup_with_form once the binding is fixed (Anvil support / table
+permission re-apply).
 
-A dedicated signup button is used rather than relying on login_with_form's
-show_signup_option link, which does not render in this app even though the Users
-service has allow_signups: true. Both paths return a logged-in user on success.
-
-Layout note: this theme defines no custom roles, so title styling uses direct
-Label properties (font_size/bold/align) rather than role='display-1'.
+Layout note: this theme defines no custom roles, so styling uses direct Label
+properties rather than role='display-1'.
 
 See IMPLEMENTATION_SPEC.md section 3 (LoginForm) and section 5 (Authentication).
 """
 
 import anvil
 import anvil.server
-import anvil.users
-from anvil import ColumnPanel, Label, Button, Spacer, Notification, open_form
+from anvil import (
+    ColumnPanel, Label, Button, Spacer, TextBox, Notification, alert, open_form,
+)
 
 
 class LoginForm(ColumnPanel):
@@ -46,23 +48,42 @@ class LoginForm(ColumnPanel):
         sign_up.set_event_handler('click', self._on_sign_up_click)
         self.add_component(sign_up)
 
+    # --- credential prompt -------------------------------------------------
+    def _prompt_credentials(self, title, action_label):
+        """Show an email + password dialog. Returns (email, password) or None."""
+        panel = ColumnPanel()
+        panel.add_component(Label(text='Email'))
+        email_box = TextBox(placeholder='email@example.com')
+        panel.add_component(email_box)
+        panel.add_component(Label(text='Password'))
+        password_box = TextBox(placeholder='password', hide_text=True)
+        panel.add_component(password_box)
+
+        confirmed = alert(panel, title=title,
+                          buttons=[(action_label, True), ('Cancel', False)])
+        if not confirmed:
+            return None
+        return (email_box.text or '').strip(), (password_box.text or '')
+
+    # --- handlers ----------------------------------------------------------
     def _on_sign_in_click(self, **event_args):
-        user = anvil.users.login_with_form(allow_remembered=True, allow_cancel=True)
-        self._after_auth(user)
+        self._authenticate('sign_in_with_email', 'Sign in', 'Sign in')
 
     def _on_sign_up_click(self, **event_args):
-        user = anvil.users.signup_with_form(allow_cancel=True)
-        self._after_auth(user)
+        self._authenticate('create_account', 'Create an account', 'Create account')
 
-    def _after_auth(self, user):
-        if user is None:
-            return  # dialog cancelled
-
-        # First call lazily creates the user_settings row via _get_or_create_settings.
+    def _authenticate(self, server_fn, title, action_label):
+        creds = self._prompt_credentials(title, action_label)
+        if creds is None:
+            return  # cancelled
+        email, password = creds
+        if not email or not password:
+            Notification("Email and password are required.", style='danger').show()
+            return
         try:
-            anvil.server.call('get_settings')
+            anvil.server.call(server_fn, email, password)
         except Exception as e:
-            Notification("Couldn't load your settings: %s" % e, style='warning').show()
-
+            Notification(str(e), style='danger').show()
+            return
         anvil.set_url_hash('dashboard')
         open_form('Main')

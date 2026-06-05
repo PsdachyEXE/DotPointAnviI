@@ -14,6 +14,7 @@ See IMPLEMENTATION_SPEC.md section 2 (server_code/notes.py) and section 1
 """
 
 import anvil.server
+import anvil.users
 import datetime
 from zoneinfo import ZoneInfo
 
@@ -141,3 +142,38 @@ def _is_iso_date(s: str) -> bool:
         return True
     except (ValueError, TypeError):
         return False
+
+
+# --- custom auth (workaround) ----------------------------------------------
+# Anvil's client-initiated signup_with_form / login_with_form raise
+# "PermissionDenied: Cannot access this table from server code" on the users
+# table (a Users-service<->table binding issue). Running the same operations
+# from a trusted server-module callable uses this module's full users-table
+# access, which sidesteps that path. Returns True on success; raises ValueError
+# with a user-facing message otherwise.
+
+@anvil.server.callable
+def create_account(email: str, password: str) -> bool:
+    email = (email or '').strip().lower()
+    if not email or not password:
+        raise ValueError("Email and password are required.")
+    try:
+        new_user = anvil.users.signup_with_email(email, password, remember=True)
+    except anvil.users.UserExists:
+        raise ValueError("An account with that email already exists — try signing in.")
+    anvil.users.force_login(new_user)
+    _get_or_create_settings(new_user)
+    return True
+
+
+@anvil.server.callable
+def sign_in_with_email(email: str, password: str) -> bool:
+    email = (email or '').strip().lower()
+    if not email or not password:
+        raise ValueError("Email and password are required.")
+    try:
+        user = anvil.users.login_with_email(email, password, remember=True)
+    except anvil.users.AuthenticationFailed:
+        raise ValueError("Incorrect email or password.")
+    _get_or_create_settings(user)
+    return True
