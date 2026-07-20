@@ -80,6 +80,8 @@ class AssessmentEditorForm(ColumnPanel):
         self._mode = mode
         self._assessment_id = assessment_id
         self._prefill = prefill
+        self._linked_note_ids = []
+        self._note_titles = {}   # id -> title cache for the linked-note pills
 
         if mode == 'bulk':
             self._build_bulk()
@@ -157,6 +159,21 @@ class AssessmentEditorForm(ColumnPanel):
         self._desc_ta = TextArea()
         body.add_component(self._desc_ta)
 
+        # --- linked notes (FR12) ---
+        body.add_component(Label(text='Linked notes (optional)'))
+        search_row = FlowPanel()
+        self._note_search_tb = TextBox(placeholder='Search your notes to link')
+        self._note_search_tb.set_event_handler('pressed_enter', self._on_note_search)
+        search_row.add_component(self._note_search_tb)
+        search_btn = Button(text='Search', role='secondary')
+        search_btn.set_event_handler('click', self._on_note_search)
+        search_row.add_component(search_btn)
+        body.add_component(search_row)
+        self._note_results = FlowPanel()
+        body.add_component(self._note_results)
+        self._linked_pills = FlowPanel()
+        body.add_component(self._linked_pills)
+
         # --- footer ---
         footer = FlowPanel()
         cancel_btn = Button(text='Cancel', role='secondary')
@@ -213,6 +230,9 @@ class AssessmentEditorForm(ColumnPanel):
             self._status_dd.selected_value = a.get('status') or 'not_started'
             self._desc_ta.text = a.get('description') or ''
             self._check_days(a.get('reminder_days') or default_days)
+            self._linked_note_ids = list(a.get('linked_note_ids') or [])
+            self._resolve_link_titles()
+            self._render_links()
 
         else:  # create
             self._check_days(default_days)
@@ -237,6 +257,7 @@ class AssessmentEditorForm(ColumnPanel):
             'description': (self._desc_ta.text or '').strip() or None,
             'reminder_days': sorted(
                 (d for d, cb in self._day_checks.items() if cb.checked), reverse=True),
+            'linked_note_ids': list(self._linked_note_ids),
         }
         # Preserve the parser audit trail (FR17) on create/preview.
         if self._mode == 'preview' and self._prefill:
@@ -266,6 +287,55 @@ class AssessmentEditorForm(ColumnPanel):
 
     def _on_cancel_click(self, **event_args):
         self.raise_event('x-close', value=None)
+
+    # --- linked notes (FR12) -----------------------------------------------
+    def _on_note_search(self, **event_args):
+        query = (self._note_search_tb.text or '').strip()
+        try:
+            notes = anvil.server.call('search_notes', query=query or None)
+        except Exception as e:
+            Notification("Couldn't search notes: %s" % e, style='danger').show()
+            return
+        self._note_results.clear()
+        if not notes:
+            self._note_results.add_component(
+                Label(text='No notes found.', foreground='#9aa0a6', font_size=11))
+            return
+        for n in notes[:8]:
+            self._note_titles[n['id']] = n.get('title') or '(untitled)'
+            b = Button(text='+ %s' % self._note_titles[n['id']], role='secondary')
+            b.set_event_handler('click', lambda nid=n['id'], **e: self._add_link(nid))
+            self._note_results.add_component(b)
+
+    def _add_link(self, note_id):
+        if note_id not in self._linked_note_ids:
+            self._linked_note_ids.append(note_id)
+        self._render_links()
+
+    def _remove_link(self, note_id):
+        self._linked_note_ids = [n for n in self._linked_note_ids if n != note_id]
+        self._render_links()
+
+    def _resolve_link_titles(self):
+        """Populate the id->title cache for already-linked notes (edit mode)."""
+        if not self._linked_note_ids:
+            return
+        try:
+            for n in anvil.server.call('search_notes'):
+                self._note_titles[n['id']] = n.get('title') or '(untitled)'
+        except Exception:
+            pass
+
+    def _render_links(self):
+        self._linked_pills.clear()
+        for nid in self._linked_note_ids:
+            pill = FlowPanel()
+            pill.add_component(Label(text=self._note_titles.get(nid, nid),
+                                     foreground='#3b7dd8'))
+            x = Button(text='x', role='secondary')
+            x.set_event_handler('click', lambda i=nid, **e: self._remove_link(i))
+            pill.add_component(x)
+            self._linked_pills.add_component(pill)
 
     # --- bulk mode ---------------------------------------------------------
     def _build_bulk(self):
