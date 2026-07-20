@@ -72,6 +72,9 @@ class DashboardForm(ColumnPanel):
         add_btn = Button(text='+ Add manually', role='secondary')
         add_btn.set_event_handler('click', self._on_add_click)
         bar.add_component(add_btn)
+        bulk_btn = Button(text='Bulk add', role='secondary')
+        bulk_btn.set_event_handler('click', self._on_bulk_click)
+        bar.add_component(bulk_btn)
         body.add_component(bar)
 
         # --- filter row ---
@@ -282,6 +285,12 @@ class DashboardForm(ColumnPanel):
     def _on_add_click(self, **event_args):
         from ..AssessmentEditorForm import AssessmentEditorForm
         result = alert(AssessmentEditorForm(mode='create'), title='', large=True, buttons=[])
+        if result:
+            self._refresh()
+
+    def _on_bulk_click(self, **event_args):
+        from ..AssessmentEditorForm import AssessmentEditorForm
+        result = alert(AssessmentEditorForm(mode='bulk'), title='', large=True, buttons=[])
         if result:
             self._refresh()
 

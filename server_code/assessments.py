@@ -206,6 +206,41 @@ def create_assessment(record: dict) -> str:
 
 
 @anvil.server.callable
+def create_bulk_assessments(records: list) -> dict:
+    """Insert many assessments atomically (FR02).
+
+    All-or-nothing: every record is validated first; if any fails, nothing is
+    inserted and {'inserted': 0, 'rejected': [{'index', 'reason'}, ...]} is
+    returned. If all pass, they are inserted inside one Transaction and
+    {'inserted': N, 'ids': [...]} is returned. The caller (bulk UI) is expected
+    to have pre-filtered LOW-confidence / incomplete parses.
+    """
+    user = _require_user()
+    records = records or []
+
+    validated = []
+    rejected = []
+    for i, rec in enumerate(records):
+        try:
+            validated.append(_validate_assessment_payload(rec, user))
+        except ValueError as e:
+            rejected.append({'index': i, 'reason': str(e)})
+    if rejected:
+        return {'inserted': 0, 'rejected': rejected}
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    ids = []
+    with tables.Transaction():
+        for payload in validated:
+            payload['user'] = user
+            payload['created_at'] = now
+            payload['updated_at'] = now
+            row = app_tables.assessments.add_row(**payload)
+            ids.append(row.get_id())
+    return {'inserted': len(ids), 'ids': ids}
+
+
+@anvil.server.callable
 def get_assessment(row_id: str) -> dict:
     """Return one owned assessment as a dict, or raise ValueError('not found')."""
     user = _require_user()

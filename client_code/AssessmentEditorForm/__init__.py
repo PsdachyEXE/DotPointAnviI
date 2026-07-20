@@ -47,6 +47,9 @@ REMINDER_DAY_OPTIONS = (14, 7, 3, 2, 1)
 
 _CONF_COLOUR = {'HIGH': '#2e7d32', 'MEDIUM': '#e8833a', 'LOW': '#d64550'}
 
+_MONTHS_ABBR = ('', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
+
 
 def _from_iso(s):
     """'YYYY-MM-DD' -> date, or None (manual; avoids Skulpt isoformat quirks)."""
@@ -61,6 +64,13 @@ def _from_iso(s):
         return None
 
 
+def _fmt_date(d):
+    """date -> 'DD Mon YYYY' via components (avoids Skulpt strftime gaps)."""
+    if d is None:
+        return 'no date'
+    return '%02d %s %d' % (d.day, _MONTHS_ABBR[d.month], d.year)
+
+
 class AssessmentEditorForm(ColumnPanel):
     def __init__(self, mode='create', assessment_id=None, prefill=None, **properties):
         super().__init__(**properties)
@@ -70,6 +80,10 @@ class AssessmentEditorForm(ColumnPanel):
         self._mode = mode
         self._assessment_id = assessment_id
         self._prefill = prefill
+
+        if mode == 'bulk':
+            self._build_bulk()
+            return
 
         # --- header (+ confidence badge in preview mode) ---
         header = FlowPanel()
@@ -252,3 +266,113 @@ class AssessmentEditorForm(ColumnPanel):
 
     def _on_cancel_click(self, **event_args):
         self.raise_event('x-close', value=None)
+
+    # --- bulk mode ---------------------------------------------------------
+    def _build_bulk(self):
+        """Paste-many UI: parse each line, tick the createable ones, insert atomically."""
+        self.add_component(Label(text='Bulk add assessments', font_size=20, bold=True))
+        self.add_component(Label(text='Paste one assessment per line, then Parse all.',
+                                 foreground='#9aa0a6'))
+        self._bulk_ta = TextArea(
+            placeholder='Methods SAC2 due Friday week 5 worth 25%\nPhysics exam 12/06 30%',
+            height='160px')
+        self.add_component(self._bulk_ta)
+
+        parse_btn = Button(text='Parse all', role='primary')
+        parse_btn.set_event_handler('click', self._on_bulk_parse_click)
+        self.add_component(parse_btn)
+
+        self._multi_panel = ColumnPanel()
+        self.add_component(self._multi_panel)
+        self._multi_rows = []   # [(parsed, checkbox), ...]
+
+        footer = FlowPanel()
+        cancel_btn = Button(text='Cancel', role='secondary')
+        cancel_btn.set_event_handler('click', self._on_cancel_click)
+        footer.add_component(cancel_btn)
+        create_btn = Button(text='Create selected', role='primary')
+        create_btn.set_event_handler('click', self._on_bulk_create_click)
+        footer.add_component(create_btn)
+        self.add_component(footer)
+
+    def _createable(self, parsed):
+        """A parsed line can auto-create only with a valid subject and a due date."""
+        f = parsed.get('fields', {})
+        return (parsed.get('confidence') != 'LOW'
+                and f.get('subject') in SUBJECTS
+                and f.get('due_date') is not None)
+
+    def _on_bulk_parse_click(self, **event_args):
+        text = (self._bulk_ta.text or '').strip()
+        if not text:
+            Notification("Paste some lines first.", style='warning').show()
+            return
+        try:
+            results = anvil.server.call('parse_bulk', text)
+        except Exception as e:
+            Notification("Couldn't parse: %s" % e, style='danger').show()
+            return
+        self._render_multi(results)
+
+    def _render_multi(self, results):
+        self._multi_panel.clear()
+        self._multi_rows = []
+        if not results:
+            self._multi_panel.add_component(
+                Label(text='No lines to parse.', foreground='#9aa0a6'))
+            return
+        for parsed in results:
+            f = parsed.get('fields', {})
+            conf = parsed.get('confidence', 'LOW')
+            createable = self._createable(parsed)
+            row = FlowPanel()
+            cb = CheckBox(checked=createable)
+            row.add_component(cb)
+            row.add_component(Label(text=' %s ' % conf, bold=True, foreground='#ffffff',
+                                    background=_CONF_COLOUR.get(conf, '#9aa0a6')))
+            summary = '%s — %s · %s · %s' % (
+                f.get('title') or '(untitled)', f.get('subject') or '?',
+                f.get('type') or '?', _fmt_date(f.get('due_date')))
+            if f.get('weight') is not None:
+                summary += ' · %g%%' % f.get('weight')
+            row.add_component(Label(text=summary))
+            if not createable:
+                reason = 'LOW confidence' if conf == 'LOW' else 'needs subject + due date'
+                row.add_component(Label(text='(%s — unticked)' % reason,
+                                        foreground='#d64550', font_size=11, italic=True))
+            self._multi_panel.add_component(row)
+            self._multi_rows.append((parsed, cb))
+
+    def _on_bulk_create_click(self, **event_args):
+        records = []
+        for parsed, cb in self._multi_rows:
+            if not cb.checked:
+                continue
+            f = parsed.get('fields', {})
+            records.append({
+                'title': f.get('title'),
+                'subject': f.get('subject'),
+                'type': f.get('type'),
+                'due_date': f.get('due_date'),
+                'weight': f.get('weight'),
+                'confidence': parsed.get('confidence'),
+                'source_text': parsed.get('source_text'),
+                'term_info': f.get('term_info'),
+            })
+        if not records:
+            Notification("Nothing ticked to create.", style='warning').show()
+            return
+        try:
+            result = anvil.server.call('create_bulk_assessments', records)
+        except Exception as e:
+            Notification(str(e), style='danger').show()
+            return
+        if result.get('rejected'):
+            msgs = ', '.join('line %d: %s' % (r['index'] + 1, r['reason'])
+                             for r in result['rejected'])
+            Notification("Some lines were invalid — nothing was saved. %s" % msgs,
+                         style='danger').show()
+            return
+        Notification("Created %d assessment(s)." % result.get('inserted', 0),
+                     style='success').show()
+        self.raise_event('x-close', value=result.get('inserted', 0))
