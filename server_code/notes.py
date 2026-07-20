@@ -3,11 +3,12 @@ import anvil.tables.query as q
 from anvil.tables import app_tables
 """Note CRUD, search, settings get/update server module.
 
-Slice 1 (§10 step 1) implements the user_settings surface only:
-  get_settings, update_settings (+ _get_or_create_settings, _settings_row_to_dict).
+Settings surface (§10 step 1): get_settings, update_settings
+(+ _get_or_create_settings, _settings_row_to_dict).
 
-Note CRUD (create_note, update_note, delete_note, toggle_pin, search_notes) and
-the EDITABLE_FIELDS_NOTE import land in the Notes slice (§10 step 6).
+Note CRUD + search (§10 step 6): create_note, update_note, delete_note,
+toggle_pin, search_notes (+ _note_row_to_dict, _validate_note_fields).
+delete_note also unlinks the note from any of the user's assessments.
 
 See IMPLEMENTATION_SPEC.md section 2 (server_code/notes.py) and section 1
 (user_settings table + uniqueness mandate).
@@ -18,7 +19,8 @@ import anvil.users
 import datetime
 from zoneinfo import ZoneInfo
 
-from ._auth import _require_user
+from ._auth import _require_user, _own_or_raise
+from ._constants import EDITABLE_FIELDS_NOTE
 
 # Defaults for a freshly created user_settings row (spec §1).
 _SETTINGS_DEFAULTS = {
@@ -142,6 +144,152 @@ def _is_iso_date(s: str) -> bool:
         return True
     except (ValueError, TypeError):
         return False
+
+
+# --- note CRUD + search (spec section 2, step 6) ---------------------------
+
+def _note_row_to_dict(row) -> dict:
+    """Plain-dict view of a note row; timestamps as ISO strings, incl. 'id'."""
+    def iso(d):
+        return d.isoformat() if d is not None else None
+    return {
+        'id': row.get_id(),
+        'title': row['title'],
+        'content': row['content'] or '',
+        'tags': row['tags'] or [],
+        'is_pinned': bool(row['is_pinned']),
+        'created_at': iso(row['created_at']),
+        'updated_at': iso(row['updated_at']),
+    }
+
+
+def _validate_note_fields(fields: dict) -> dict:
+    """Validate a note create/update patch; return a cleaned copy or raise."""
+    out = dict(fields)
+
+    if 'title' in out:
+        title = out['title']
+        if not isinstance(title, str) or not title.strip():
+            raise ValueError("title required")
+        if len(title) > 200:
+            raise ValueError("title too long (max 200)")
+        out['title'] = title.strip()
+
+    if 'content' in out:
+        content = out['content']
+        if content is None:
+            out['content'] = ''
+        elif not isinstance(content, str):
+            raise ValueError("content must be text")
+
+    if 'tags' in out:
+        tags = out['tags'] or []
+        if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
+            raise ValueError("tags must be a list of strings")
+        # De-duplicate, preserving order, dropping blanks.
+        seen, deduped = set(), []
+        for t in tags:
+            key = t.strip()
+            if key and key.lower() not in seen:
+                seen.add(key.lower())
+                deduped.append(key)
+        out['tags'] = deduped
+
+    if 'is_pinned' in out and not isinstance(out['is_pinned'], bool):
+        raise ValueError("is_pinned must be a bool")
+
+    return out
+
+
+@anvil.server.callable
+def create_note(record: dict) -> str:
+    """Create a note owned by the current user; return its row id (FR10)."""
+    user = _require_user()
+    record = record or {}
+    clean = _validate_note_fields({
+        'title': record.get('title'),
+        'content': record.get('content') or '',
+        'tags': record.get('tags') or [],
+        'is_pinned': bool(record.get('is_pinned', False)),
+    })
+    now = datetime.datetime.now(datetime.timezone.utc)
+    row = app_tables.notes.add_row(
+        title=clean['title'], content=clean['content'], tags=clean['tags'],
+        is_pinned=clean['is_pinned'], user=user, created_at=now, updated_at=now)
+    return row.get_id()
+
+
+@anvil.server.callable
+def update_note(row_id: str, fields: dict) -> dict:
+    """Whitelist-filter, validate and apply an edit to an owned note (FR10)."""
+    user = _require_user()
+    row = app_tables.notes.get_by_id(row_id)
+    if row is None:
+        raise ValueError("not found")
+    _own_or_raise(row, user)
+    clean = _validate_note_fields(
+        {k: v for k, v in (fields or {}).items() if k in EDITABLE_FIELDS_NOTE})
+    if clean:
+        clean['updated_at'] = datetime.datetime.now(datetime.timezone.utc)
+        row.update(**clean)
+    return _note_row_to_dict(row)
+
+
+@anvil.server.callable
+def delete_note(row_id: str) -> bool:
+    """Delete an owned note, first unlinking it from any of the user's assessments."""
+    user = _require_user()
+    row = app_tables.notes.get_by_id(row_id)
+    if row is None:
+        return False
+    _own_or_raise(row, user)
+    with tables.Transaction():
+        for a in app_tables.assessments.search(user=user):
+            linked = a['linked_note_ids'] or []
+            if row_id in linked:
+                a.update(linked_note_ids=[n for n in linked if n != row_id])
+        row.delete()
+    return True
+
+
+@anvil.server.callable
+def toggle_pin(row_id: str) -> bool:
+    """Flip a note's pinned state; return the new value (FR10)."""
+    user = _require_user()
+    row = app_tables.notes.get_by_id(row_id)
+    if row is None:
+        raise ValueError("not found")
+    _own_or_raise(row, user)
+    new_value = not row['is_pinned']
+    row.update(is_pinned=new_value,
+               updated_at=datetime.datetime.now(datetime.timezone.utc))
+    return new_value
+
+
+@anvil.server.callable
+def search_notes(query: str = None, tag: str = None, pinned_only: bool = False) -> list:
+    """Return the user's notes (pinned-first, then recent) filtered by query/tag (FR11)."""
+    user = _require_user()
+    rows = list(app_tables.notes.search(user=user))
+
+    def _sort_key(r):
+        updated = r['updated_at']
+        ts = updated.timestamp() if updated is not None else 0
+        return (0 if r['is_pinned'] else 1, -ts)
+    rows.sort(key=_sort_key)
+
+    if query:
+        needle = query.strip().lower()
+        rows = [r for r in rows
+                if needle in ((r['title'] or '') + ' ' + (r['content'] or '')).lower()]
+    if tag:
+        want = tag.strip().lower()
+        rows = [r for r in rows
+                if any(want == (t or '').lower() for t in (r['tags'] or []))]
+    if pinned_only:
+        rows = [r for r in rows if r['is_pinned']]
+
+    return [_note_row_to_dict(r) for r in rows]
 
 
 # --- custom auth (workaround) ----------------------------------------------

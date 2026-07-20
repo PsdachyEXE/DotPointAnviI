@@ -26,7 +26,7 @@ _ROUTES = {
     'login': 'LoginForm',
     'settings': 'SettingsForm',
     'import-export': 'ImportExportForm',
-    # 'notes': 'NotesForm'  -- added in the Notes slice (§10 step 6)
+    'notes': 'NotesForm',
 }
 
 
@@ -78,6 +78,9 @@ class Main(ColumnPanel):
         if form_name == 'ImportExportForm':
             from ..ImportExportForm import ImportExportForm
             return ImportExportForm()
+        if form_name == 'NotesForm':
+            from ..NotesForm import NotesForm
+            return NotesForm()
         # default / 'dashboard'
         from ..DashboardForm import DashboardForm
         return DashboardForm()
