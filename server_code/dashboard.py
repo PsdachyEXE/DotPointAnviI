@@ -54,11 +54,17 @@ def _build_calendar(year: int, month: int, decorated: list) -> dict:
 
 
 def _parse_month(month, today):
-    """'YYYY-MM' -> (year, month); fall back to today's year/month."""
+    """'YYYY-MM' -> (year, month); fall back to today's year/month.
+
+    Validates the month is 1-12 so a malformed value can't reach
+    calendar.monthcalendar and raise IllegalMonthError.
+    """
     if month:
         try:
             year_s, month_s = month.split('-')
-            return int(year_s), int(month_s)
+            year, mon = int(year_s), int(month_s)
+            if 1 <= mon <= 12:
+                return year, mon
         except (ValueError, TypeError, AttributeError):
             pass
     return today.year, today.month

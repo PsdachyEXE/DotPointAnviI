@@ -11,8 +11,8 @@ via the `mode` constructor arg (spec section 3):
                    confidence badge and per-field 'why' provenance (FR17).
 
 ParserPreviewForm was dropped from the design; its preview-before-commit role is
-this form in 'preview' mode. Save raises 'x-close' so the parent alert() returns
-the new/updated assessment id; Cancel returns None. (bulk mode and the linked-
+this form in 'preview' mode. Save raises 'x-close-alert' so the parent alert()
+returns the new/updated assessment id; Cancel returns None. (bulk mode and the linked-
 notes manager land in later slices - spec section 10 steps 5 & 7.)
 
 See IMPLEMENTATION_SPEC.md section 3 (AssessmentEditorForm).
@@ -283,10 +283,10 @@ class AssessmentEditorForm(ColumnPanel):
             Notification(str(e), style='danger').show()
             return
         Notification("Assessment saved.", style='success').show()
-        self.raise_event('x-close', value=result_id)
+        self.raise_event('x-close-alert', value=result_id)
 
     def _on_cancel_click(self, **event_args):
-        self.raise_event('x-close', value=None)
+        self.raise_event('x-close-alert', value=None)
 
     # --- linked notes (FR12) -----------------------------------------------
     def _on_note_search(self, **event_args):
@@ -445,4 +445,4 @@ class AssessmentEditorForm(ColumnPanel):
             return
         Notification("Created %d assessment(s)." % result.get('inserted', 0),
                      style='success').show()
-        self.raise_event('x-close', value=result.get('inserted', 0))
+        self.raise_event('x-close-alert', value=result.get('inserted', 0))

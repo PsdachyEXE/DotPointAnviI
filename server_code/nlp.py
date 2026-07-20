@@ -48,6 +48,13 @@ _WEEKDAYS = {
     'friday': 4, 'fri': 4, 'saturday': 5, 'sat': 5, 'sunday': 6, 'sun': 6,
 }
 
+# Free-text weekday matcher (_extract_date step 5) EXCLUDES the bare 'sat'
+# abbreviation: it collides with the SAT assessment type (School Assessed Task),
+# so a bare 'SAT' must never be read as Saturday. 'saturday' still matches. The
+# term-week path (_try_parse_week_phrase) has its own position guard. Sorted
+# longest-first so multi-char names win the alternation.
+_FREE_WEEKDAYS = sorted((k for k in _WEEKDAYS if k != 'sat'), key=len, reverse=True)
+
 _MONTHS = {
     'jan': 1, 'january': 1, 'feb': 2, 'february': 2, 'mar': 3, 'march': 3,
     'apr': 4, 'april': 4, 'may': 5, 'jun': 6, 'june': 6, 'jul': 7, 'july': 7,
@@ -213,6 +220,10 @@ def _extract_date(text: str, today: datetime.date, settings_row):
                 year += 2000
         d = _safe_date(year, month, day)
         if d is not None:
+            # No explicit year and already past -> roll to next year (matches the
+            # month-name branch and the parser's future-oriented intent).
+            if m.group(3) is None and d < today:
+                d = _safe_date(today.year + 1, month, day) or d
             return d, 'matched "%s" → %s' % (m.group(0), d.strftime('%d %b %Y')), week_phrase_text, m.group(0)
 
     # 3. 'tomorrow' / 'today'.
@@ -228,8 +239,8 @@ def _extract_date(text: str, today: datetime.date, settings_row):
         d = today + datetime.timedelta(days=int(m.group(1)))
         return d, 'matched "%s" → %s' % (m.group(0), d.strftime('%d %b %Y')), week_phrase_text, m.group(0)
 
-    # 5. Weekday names ('next friday', 'friday').
-    m = re.search(r'\b(?:next\s+|this\s+)?(' + '|'.join(_WEEKDAYS) + r')\b', low)
+    # 5. Weekday names ('next friday', 'friday'). Bare 'sat' excluded (SAT type).
+    m = re.search(r'\b(?:next\s+|this\s+)?(' + '|'.join(_FREE_WEEKDAYS) + r')\b', low)
     if m:
         d = _next_weekday(today, _WEEKDAYS[m.group(1)])
         return d, 'matched "%s" → %s' % (m.group(0), d.strftime('%d %b %Y')), week_phrase_text, m.group(0)

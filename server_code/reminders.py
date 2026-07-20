@@ -46,9 +46,14 @@ def _due_thresholds(days_remaining, reminder_days) -> list:
     return sorted({d for d in (reminder_days or []) if isinstance(d, int) and days_remaining <= d})
 
 
-def _build_email(assessment: dict, d: int):
+def _build_email(assessment: dict, days_remaining: int):
     """Return (subject, text, html) for one reminder. assessment is a plain dict
-    with keys title, subject, type, due_date(date), weight."""
+    with keys title, subject, type, due_date(date), weight.
+
+    The countdown reflects the ACTUAL days remaining, not the reminder threshold
+    — a threshold may first fire late (missed tick, or an assessment created
+    close to its due date), so 'due in 7 days' on a due-today item would be wrong.
+    """
     title = assessment.get('title') or '(untitled)'
     subject_name = assessment.get('subject') or ''
     a_type = assessment.get('type') or ''
@@ -56,8 +61,14 @@ def _build_email(assessment: dict, d: int):
     due_str = _format_date_au(due_date) if due_date else 'no date'
     weight = assessment.get('weight')
 
-    plural = 's' if d != 1 else ''
-    subject = 'Reminder: %s due in %d day%s' % (title, d, plural)
+    n = days_remaining
+    if n <= 0:
+        countdown = 'today'
+    elif n == 1:
+        countdown = 'in 1 day'
+    else:
+        countdown = 'in %d days' % n
+    subject = 'Reminder: %s due %s' % (title, countdown)
 
     lines = [
         'Hi,',
@@ -66,7 +77,7 @@ def _build_email(assessment: dict, d: int):
         '',
         '  %s' % title,
         '  Subject: %s' % subject_name,
-        '  Due:     %s  (in %d day%s)' % (due_str, d, plural),
+        '  Due:     %s  (%s)' % (due_str, countdown),
         '  Type:    %s' % a_type,
     ]
     if weight is not None:
@@ -86,7 +97,7 @@ def _build_email(assessment: dict, d: int):
     html = (
         '<div style="font-family:sans-serif">'
         '<h2 style="margin-bottom:4px">%s</h2>'
-        '<p>This assessment is due in <strong>%d day%s</strong>.</p>'
+        '<p>This assessment is due <strong>%s</strong>.</p>'
         '<dl>'
         '<dt>Subject</dt><dd>%s</dd>'
         '<dt>Due</dt><dd>%s</dd>'
@@ -96,7 +107,7 @@ def _build_email(assessment: dict, d: int):
         '<p><a href="%s/#dashboard">Open DotPoint</a></p>'
         '<p style="color:#888">— DotPoint</p>'
         '</div>'
-    ) % (title, d, plural, subject_name, due_str, a_type, weight_html, APP_BASE_URL)
+    ) % (title, countdown, subject_name, due_str, a_type, weight_html, APP_BASE_URL)
 
     return subject, text, html
 
@@ -125,7 +136,7 @@ def _process_user(user, sent_errors):
             subject, text, html = _build_email({
                 'title': a['title'], 'subject': a['subject'], 'type': a['type'],
                 'due_date': a['due_date'], 'weight': a['weight'],
-            }, d)
+            }, days_remaining)
             try:
                 anvil.email.send(to=user['email'], subject=subject, text=text, html=html)
             except anvil.email.SendFailure:

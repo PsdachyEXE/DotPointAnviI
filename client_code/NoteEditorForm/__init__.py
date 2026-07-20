@@ -5,8 +5,8 @@ from anvil.tables import app_tables
 
 Opened as an alert(..., large=True) from NotesForm. Title, plain-text content
 (no markdown render — SRS plain-text constraint), a simple tag manager (type +
-Add, pills with x), and a pin checkbox. Save raises 'x-close' with the note id;
-Cancel returns None. (The 300ms edit-mode autosave in the spec is deferred; Save
+Add, pills with x), and a pin checkbox. Save raises 'x-close-alert' with the note
+id; Cancel returns None. (The 300ms edit-mode autosave in the spec is deferred; Save
 is explicit for now.)
 
 See IMPLEMENTATION_SPEC.md section 3 (NoteEditorForm).
@@ -123,7 +123,7 @@ class NoteEditorForm(ColumnPanel):
             Notification(str(e), style='danger').show()
             return
         Notification("Note saved.", style='success').show()
-        self.raise_event('x-close', value=result_id)
+        self.raise_event('x-close-alert', value=result_id)
 
     def _on_cancel_click(self, **event_args):
-        self.raise_event('x-close', value=None)
+        self.raise_event('x-close-alert', value=None)
