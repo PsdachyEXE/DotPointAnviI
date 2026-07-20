@@ -255,6 +255,13 @@ def list_assessments(filters: dict = None, sort: dict = None) -> list:
     show_completed[bool], month['YYYY-MM']. sort: {'by','direction'}.
     """
     user = _require_user()
+    settings_row = _get_or_create_settings(user)
+    return _list_assessments_impl(user, settings_row, filters, sort)
+
+
+def _list_assessments_impl(user, settings_row, filters: dict = None, sort: dict = None) -> list:
+    """Shared core of list_assessments; reused by dashboard.get_dashboard_data
+    without a nested @anvil.server.callable round-trip (NFR01)."""
     filters = filters or {}
     sort = sort or {}
 
@@ -288,7 +295,6 @@ def list_assessments(filters: dict = None, sort: dict = None) -> list:
 
     rows = app_tables.assessments.search(tables.order_by(sort_by, ascending=ascending), **query)
 
-    settings_row = _get_or_create_settings(user)
     today = _user_today(settings_row)
     return [_decorate(_row_to_dict(r), today) for r in rows]
 
