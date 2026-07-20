@@ -14,15 +14,20 @@ results go through _row_to_dict.
 See IMPLEMENTATION_SPEC.md section 2 (server_code/assessments.py).
 """
 
+import anvil
 import anvil.server
 import datetime
+import json
 
 from ._auth import _require_user, _own_or_raise
 from ._datetime import _user_today, _format_date_au, _urgency_band
 from ._constants import (
     ALLOWED_SORT_KEYS, EDITABLE_FIELDS_ASSESSMENT, SUBJECT_ALIASES,
 )
-from .notes import _get_or_create_settings
+from .notes import (
+    _get_or_create_settings, _settings_row_to_dict, _note_row_to_dict,
+    _validate_note_fields, update_settings as _apply_settings,
+)
 
 _VALID_TYPES = {'sac', 'sat', 'exam', 'project', 'homework', 'other'}
 _VALID_STATUSES = {'not_started', 'in_progress', 'completed'}
@@ -347,3 +352,115 @@ def _month_bounds(month_str):
         return first, last
     except (ValueError, TypeError, AttributeError):
         return None, None
+
+
+# --- export / import (FR18, FR19) ------------------------------------------
+
+@anvil.server.callable
+def export_user_data():
+    """Return all of the current user's data as a downloadable JSON blob (FR18)."""
+    user = _require_user()
+    settings = _get_or_create_settings(user)
+    assessments = [_row_to_dict(r) for r in app_tables.assessments.search(user=user)]
+    notes = [_note_row_to_dict(r) for r in app_tables.notes.search(user=user)]
+    payload = {
+        'version': 1,
+        'exported_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        'assessments': assessments,   # reminder_logs deliberately excluded (FR18)
+        'notes': notes,
+        'settings': _settings_row_to_dict(settings),
+    }
+    blob = json.dumps(payload, indent=2).encode('utf-8')
+    name = 'dotpoint-export-%s.json' % _user_today(settings).strftime('%Y-%m-%d')
+    return anvil.BlobMedia('application/json', blob, name=name)
+
+
+def _validate_import_payload(data: dict):
+    """Validate a decoded export dict up-front (before any write). Returns
+    (validated_notes, validated_assessments) or raises ValueError."""
+    if (not isinstance(data, dict) or data.get('version') != 1
+            or not isinstance(data.get('assessments'), list)
+            or not isinstance(data.get('notes'), list)
+            or not isinstance(data.get('settings'), dict)):
+        raise ValueError("invalid export format")
+
+    validated_notes = []
+    for i, n in enumerate(data['notes']):
+        try:
+            clean = _validate_note_fields({
+                'title': n.get('title'), 'content': n.get('content') or '',
+                'tags': n.get('tags') or [],
+                'is_pinned': bool(n.get('is_pinned', False)),
+            })
+        except ValueError as e:
+            raise ValueError("note[%d]: %s" % (i, e))
+        validated_notes.append((n.get('id'), clean))
+
+    validated_assessments = []
+    return_user = None  # validation of linked_note_ids is deferred (remapped later)
+    for i, a in enumerate(data['assessments']):
+        rec = dict(a)
+        old_links = rec.get('linked_note_ids') or []
+        rec['linked_note_ids'] = []
+        try:
+            payload = _validate_assessment_payload(rec, return_user)
+        except ValueError as e:
+            raise ValueError("assessment[%d]: %s" % (i, e))
+        validated_assessments.append((payload, old_links))
+
+    return validated_notes, validated_assessments
+
+
+@anvil.server.callable
+def import_user_data(blob) -> dict:
+    """Import a previously-exported JSON blob (FR19).
+
+    Everything is validated first; a malformed file or any invalid row rejects
+    the whole import (ValueError) with nothing written. Valid data is inserted
+    inside one Transaction: notes first (building an old-id -> new-id map), then
+    assessments with their linked_note_ids remapped. Title collisions for the
+    user are suffixed with the import timestamp. Settings are applied best-effort.
+    """
+    user = _require_user()
+    try:
+        raw = blob.get_bytes().decode('utf-8')
+        data = json.loads(raw)
+    except Exception:
+        raise ValueError("invalid export format")
+
+    validated_notes, validated_assessments = _validate_import_payload(data)
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    stamp = now.strftime('%Y-%m-%d %H:%M')
+    id_map = {}
+    renamed = []
+
+    with tables.Transaction():
+        for old_id, clean in validated_notes:
+            row = app_tables.notes.add_row(
+                title=clean['title'], content=clean['content'], tags=clean['tags'],
+                is_pinned=clean['is_pinned'], user=user, created_at=now, updated_at=now)
+            if old_id:
+                id_map[old_id] = row.get_id()
+
+        for payload, old_links in validated_assessments:
+            existing = app_tables.assessments.search(user=user, title=payload['title'])
+            if any(True for _ in existing):
+                payload['title'] = '%s (imported %s)' % (payload['title'], stamp)
+                renamed.append(payload['title'])
+            payload['linked_note_ids'] = [id_map[o] for o in old_links if o in id_map]
+            payload['user'] = user
+            payload['created_at'] = now
+            payload['updated_at'] = now
+            app_tables.assessments.add_row(**payload)
+
+    try:
+        _apply_settings(data['settings'])   # whitelisted + validated inside notes
+    except Exception:
+        pass
+
+    return {
+        'notes_inserted': len(validated_notes),
+        'assessments_inserted': len(validated_assessments),
+        'renamed': renamed,
+    }
