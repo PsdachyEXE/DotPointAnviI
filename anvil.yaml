@@ -204,7 +204,6 @@ native_deps: {head_html: ''}
 package_name: DotPoint
 runtime_options:
   client_version: '3'
-  server_spec: {base: python310-full}
   server_version: python3-full
   version: 2
 scheduled_tasks: []
