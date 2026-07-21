@@ -213,6 +213,6 @@ services:
   server_config: {auto_create_missing_columns: false}
   source: /runtime/services/tables.yml
 - client_config: {allow_remembered_logins: true, allow_signup: true, allow_signups: true, confirm_email: false, enable_automatically: true, enable_password_reset_email: true, n_password_failures: 10, remember_me_days: 7, require_secure_passwords: true, share_login_status: true, use_email: true, use_mfa: false, use_token: true}
-  server_config: {}
+  server_config: {user_table: users}
   source: /runtime/services/anvil/users.yml
 startup: {module: Main, type: form}
