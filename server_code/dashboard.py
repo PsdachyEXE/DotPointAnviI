@@ -21,6 +21,7 @@ from ._auth import _require_user
 from ._datetime import _user_today, _urgency_band
 from .notes import _get_or_create_settings, _settings_row_to_dict
 from .assessments import _list_assessments_impl, _row_to_dict, _decorate
+from .exams import _exam_subjects, _exams_for_subjects, _next_exam, _exam_days_for_month
 
 
 def _build_calendar(year: int, month: int, decorated: list) -> dict:
@@ -102,7 +103,16 @@ def get_dashboard_data(month: str = None, filters: dict = None, sort: dict = Non
     ]
     upcoming.sort(key=lambda a: a['due_date'])
 
-    subjects = sorted({a['subject'] for a in all_decorated if a.get('subject')})
+    # Filter dropdown: the student's locked subjects first (spec §11), then any
+    # legacy data subjects not in that list (so old rows stay filterable).
+    locked = _exam_subjects(settings)
+    data_subjects = sorted({a['subject'] for a in all_decorated if a.get('subject')})
+    subjects = list(locked) + [s for s in data_subjects if s not in locked]
+
+    # Exam overlay (spec §13): flag this month's exam days on the calendar and
+    # surface the next-exam countdown chip.
+    user_exams = _exams_for_subjects(locked, today)
+    calendar_payload['exam_days'] = _exam_days_for_month(user_exams, year, mon)
 
     return {
         'today': today.isoformat(),
@@ -110,5 +120,6 @@ def get_dashboard_data(month: str = None, filters: dict = None, sort: dict = Non
         'calendar': calendar_payload,
         'upcoming': upcoming,
         'subjects': subjects,
+        'next_exam': _next_exam(user_exams),
         'settings': _settings_row_to_dict(settings),
     }
