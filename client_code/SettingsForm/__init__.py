@@ -18,7 +18,7 @@ import anvil.server
 import datetime
 from anvil import (
     ColumnPanel, FlowPanel, Label, CheckBox, DatePicker, TextBox, DropDown,
-    Button, Notification,
+    Button, Link, Notification,
 )
 
 from ..common import make_top_bar
@@ -33,6 +33,14 @@ TIMEZONES = (
 )
 
 _NUM_TERMS = 4
+
+# One-click preset: Victorian government school term dates for 2026.
+_VIC_2026_TERMS = (
+    (datetime.date(2026, 1, 28), datetime.date(2026, 4, 2)),
+    (datetime.date(2026, 4, 20), datetime.date(2026, 6, 26)),
+    (datetime.date(2026, 7, 13), datetime.date(2026, 9, 18)),
+    (datetime.date(2026, 10, 5), datetime.date(2026, 12, 18)),
+)
 
 
 def _to_iso(d):
@@ -91,6 +99,10 @@ class SettingsForm(ColumnPanel):
             body.add_component(row)
             self._term_pickers.append((start_dp, end_dp))
 
+        preset = Link(text='Load VIC 2026 term dates', foreground='#2f6fd0')
+        preset.set_event_handler('click', self._on_load_preset)
+        body.add_component(preset)
+
         year_row = FlowPanel()
         year_row.add_component(Label(text='School year'))
         self._school_year_tb = TextBox(placeholder='e.g. 2026')
@@ -145,6 +157,15 @@ class SettingsForm(ColumnPanel):
             # Keep an out-of-list stored value selectable.
             self._timezone_dd.items = list(TIMEZONES) + [tz]
         self._timezone_dd.selected_value = tz
+
+    def _on_load_preset(self, **event_args):
+        """Fill the term pickers with the VIC 2026 dates (user still clicks Save)."""
+        for (start_dp, end_dp), (s, e) in zip(self._term_pickers, _VIC_2026_TERMS):
+            start_dp.date = s
+            end_dp.date = e
+        self._school_year_tb.text = '2026'
+        Notification("VIC 2026 term dates loaded — click Save to apply.",
+                     style='info').show()
 
     def _on_save_click(self, **event_args):
         fields = {
