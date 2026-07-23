@@ -117,6 +117,6 @@ EDITABLE_FIELDS_NOTE = (
 )
 
 # --- Misc ------------------------------------------------------------------
-# Base URL used in reminder email links (spec section 6). Update to the app's
-# published URL once known.
-APP_BASE_URL = 'https://dotpoint.anvil.app'
+# Base URL used in reminder email links (spec section 6): the app's published
+# public URL (Anvil Hobby-plan environment).
+APP_BASE_URL = 'https://honored-willing-tea.anvil.app'
