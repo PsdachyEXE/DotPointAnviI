@@ -1092,6 +1092,81 @@ Vertical-slice ordering: build the foundations, then complete one end-to-end fea
 
 ---
 
+## 11. Subject Onboarding (post-MVP slice, 2026-07)
+
+**Goal:** every account locks in its actual VCE studies, and those studies then
+drive the whole app (editor dropdown, dashboard filter, parser alias priority,
+exam timetable).
+
+**Data:** `user_settings.subjects` (simpleObject; list of canonical subject
+strings, or null = not onboarded). Written ONLY by `notes.set_subjects` — the
+key is deliberately excluded from the `update_settings` whitelist so the
+validation rules cannot be bypassed.
+
+**Catalog:** `_constants.SUBJECT_GROUPS` / `CANONICAL_SUBJECTS` — the ~46
+commonly-taken VCAA studies grouped by learning area (source cited in the
+module). Every catalog entry has at least its own lowercased name in
+`SUBJECT_ALIASES`, so `assessments._validate_assessment_payload` accepts the
+whole catalog. `Further Mathematics` was renamed `General Mathematics` (VCAA
+2023); `further*` aliases retained. The generic `Mathematics` catch-all stays
+alias-only (not in the picker).
+
+**Rules (`notes._clean_subjects`):**
+- every entry must be a catalog subject; dedupe + strip; max 12;
+- **>= 1 mathematics study** (`MATHS_GROUP`) — a DotPoint client mandate
+  (VCAA does not require maths; the client does);
+- **English group always present** (`ENGLISH_GROUP` = English / EAL / English
+  Language / Literature, per the VCAA English requirement): if none selected,
+  `'English'` is appended automatically. The client warns first (confirm
+  dialog) so the auto-add is never a surprise.
+
+**Flow:** `Main` router gates any logged-in user whose settings carry no
+subjects into `OnboardingForm` (route `#onboarding`), whatever hash they hit.
+The form renders `common.SubjectPicker` (grouped checkboxes over
+`get_subject_catalog`), pre-checks the maths/English rules client-side, calls
+`set_subjects`, seeds the session cache, and routes to the dashboard. Changing
+subjects later is a deliberate Settings flow (§12).
+
+**Session cache:** `common.get_session_settings()` caches one `get_settings`
+round-trip per browser session; the router reads it on every navigation for
+the gate + theme. All settings writers push the server response back via
+`set_session_settings`; sign-out and login clear it.
+
+**Parser:** `nlp._match_subject(text, tokens, user_subjects)` tries aliases of
+locked subjects first (full table as fallback), and remaps bare
+`math/maths/mathematics` onto the student's single locked maths study when
+unambiguous.
+
+## 12. Settings: Change Subjects + Theme (post-MVP slice, 2026-07)
+
+- **Change subjects:** chips show the locked list; `Change subjects…` opens a
+  confirm dialog (consequences spelled out), then the shared `SubjectPicker`
+  prefilled, then `set_subjects` re-runs the same server-side rules.
+- **Theme:** `user_settings.theme` (`'light'` default | `'dark'`) now has a
+  dropdown. `common.apply_theme` toggles `body.dotpoint-dark`; the whole
+  palette is CSS variables in `anvil.yaml native_deps.head_html` (light values
+  on `:root`, dark overrides under `body.dotpoint-dark`). The router applies
+  the theme from the session cache on every navigation, so it survives
+  reloads without a per-route server call.
+
+## 13. VCE Exam Timetable 2026 (post-MVP slice, 2026-07)
+
+- **Data:** `exams.EXAM_TIMETABLE_2026` — written-exam sessions (date, start,
+  end, paper) keyed by canonical subject, transcribed from the official VCAA
+  "2026 VCE examination timetable" (URL cited in the module; retrieved
+  2026-07-23; independently re-verified). Subjects with no VCAA written exam
+  simply have no entry.
+- **Server:** `exams.get_exam_timetable()` → the student's papers (locked
+  subjects; English guaranteed via `_exam_subjects` even for legacy rows),
+  each decorated with `days_remaining` + the shared urgency band (`done` once
+  past), sorted by date; plus `next_exam` and `no_exam_subjects`.
+- **Client:** `ExamsForm` (route `#exams`, top-bar link) — countdown banner,
+  a card per paper, source link. `DashboardForm` overlays `calendar.exam_days`
+  (purple `▲` markers, exams included in the day popup) and shows a next-exam
+  countdown chip linking to the Exams view.
+
+---
+
 ## Coverage check
 
 Cross-reference of `REQUIREMENTS_COVERAGE.md` IMPLEMENTED + PARTIAL requirements to their spec locations:
@@ -1135,13 +1210,14 @@ No requirement is unaddressed.
 ## Totals
 
 - **Data tables: 4** (`assessments`, `notes`, `user_settings`, `reminder_logs`).
-- **Server functions (`@anvil.server.callable` + `@anvil.server.background_task`): 20**
+- **Server functions (`@anvil.server.callable` + `@anvil.server.background_task`): 25**
   - `nlp.py`: `parse_text`, `parse_bulk` — 2
   - `assessments.py`: `create_assessment`, `create_bulk_assessments`, `update_assessment`, `delete_assessment`, `list_assessments`, `get_assessment`, `export_user_data`, `import_user_data` — 8
-  - `notes.py`: `create_note`, `update_note`, `delete_note`, `toggle_pin`, `search_notes`, `get_settings`, `update_settings` — 7
+  - `notes.py`: `create_note`, `update_note`, `delete_note`, `toggle_pin`, `search_notes`, `get_settings`, `update_settings`, `get_subject_catalog` (§11), `set_subjects` (§11), `create_account` (§5 workaround), `sign_in_with_email` (§5 workaround) — 11
   - `reminders.py`: `run_reminder_check` (background_task), `trigger_reminder_check_now` (callable) — 2
   - `dashboard.py`: `get_dashboard_data` — 1
+  - `exams.py`: `get_exam_timetable` (§13) — 1
   - Server-side `render_markdown` helper (§8 markdown row) is not counted; implement as a private function imported by the forms that need it, or as a callable if cross-form caching becomes useful.
-- **Client forms: 8** — `Main`, `LoginForm`, `DashboardForm`, `AssessmentEditorForm`, `NotesForm`, `NoteEditorForm`, `SettingsForm`, `ImportExportForm`. (`ParserPreviewForm` was folded into `AssessmentEditorForm(mode='preview')` in §3.)
+- **Client forms: 10** — `Main`, `LoginForm`, `DashboardForm`, `AssessmentEditorForm`, `NotesForm`, `NoteEditorForm`, `SettingsForm`, `ImportExportForm`, `OnboardingForm` (§11), `ExamsForm` (§13). (`ParserPreviewForm` was folded into `AssessmentEditorForm(mode='preview')` in §3.)
 - **DROPPED features (§8): 13** — `localStorage.dotpoint_local_mode`, Electron native notifications, Chrome Extension popup, Chrome Extension service worker, `chrome.identity` OAuth, `framer-motion`, `CommandPalette`, `useReminders` 60-second poller, `cleanupOldReminderLogs`, `dataService.setUser` + `migrateLocalDataToCloud`, `useTheme` Dexie-bypass bug, extension hardcoded Vercel URL, `firebase.ts` `auth = getAuth(app)` typo.
 - **Decisions Needed: 3** (listed at top — `confidence`/`source_text` columns, `timezone` column, `reminder_logs.assessment_id` semantics).

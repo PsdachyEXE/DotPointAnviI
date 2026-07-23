@@ -7,7 +7,7 @@ used: **offline unit suites** against the real server modules, a
 journeys** in the running app. Defects found at each layer were fixed and
 re-tested; the trail is recorded below.
 
-## 1. Offline unit suites (~150 assertions)
+## 1. Offline unit suites (~200 assertions)
 
 The server modules are pure Python over Anvil's table API, so they are tested
 offline by stubbing `anvil.*` in `sys.modules` and loading `server_code/` as a
@@ -24,6 +24,8 @@ package (harness scripts kept outside the repo). All suites pass.
 | export/import | JSON round-trip shape, schema rejection, collision renames | (suite) |
 | fixes-regression | Regression locks for the four audited defects (below) | 11 |
 | tz-compat | zoneinfo AND pytz backends: module imports, tz-aware now, junk-timezone rejection | 10 |
+| subjects (§11) | Catalog integrity (aliases cover the catalog, no type-keyword collisions), `set_subjects` rules (maths required, English auto-add, dedupe, unknown/oversize rejection, whitelist lock), parser prioritisation + single-maths remap + fallback, new aliases | 29 |
+| exams (§13) | Timetable integrity (catalog subjects, in-period weekday dates, valid times), verified date spot-checks, English guarantee, days-remaining/urgency decoration, next-exam selection, month bucketing with string keys | 22 |
 
 ## 2. Evaluation-criteria measurement (EC-EF-01 / EC-EF-02)
 

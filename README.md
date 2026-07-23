@@ -11,7 +11,14 @@ bulk import (atomic), the three-panel dashboard (list + calendar + upcoming,
 filters/sort, clickable urgent days, inline card status changes), notes
 (CRUD/search/tags/pinning) with assessment linking, the 30-minute email
 reminder dispatcher (scheduled task registered), and JSON export/import.
-A light theme ships via `native_deps.head_html` styling semantic role classes.
+
+Post-MVP slices (spec §11–§13): **subject onboarding** — every account locks
+in its VCE studies (≥1 maths, English group guaranteed per the VCAA rule)
+which then drive the editor dropdown, dashboard filter and parser alias
+priority; a deliberate **change-subjects flow** and a **light/dark theme
+picker** in Settings (CSS variables + `body.dotpoint-dark`); and the
+**VCE 2026 exam timetable** view (official VCAA dates, per-student papers,
+countdown chip + calendar exam markers).
 
 Parser accuracy measured at **30/30 subjects and 30/30 due dates** against the
 EC-EF-01/02 test set (target ≥80%). See `docs/TESTING.md` for the full
@@ -24,20 +31,23 @@ DotPointAnviI/
   anvil.yaml              # Anvil app config (services, startup form, runtime)
   client_code/            # Fully programmatic forms (Anvil container subclasses)
     LoginForm/__init__.py
+    OnboardingForm/__init__.py   # Mandatory post-signup subject selection (§11)
     DashboardForm/__init__.py
     AssessmentEditorForm/__init__.py
     NoteEditorForm/__init__.py
+    ExamsForm/__init__.py        # VCE 2026 written-exam timetable view (§13)
     SettingsForm/__init__.py
     ImportExportForm/__init__.py
     ParserPreviewForm/__init__.py
-    common/__init__.py    # Shared client-side helpers
+    common/__init__.py    # Shared client-side helpers (top bar, SubjectPicker, theme)
   server_code/            # Server modules (one per concern)
     nlp.py                # Text parser (parse_text, parse_bulk)
     assessments.py        # CRUD + bulk + export/import
-    notes.py              # Note CRUD + search + settings get/update
+    notes.py              # Note CRUD + search + settings/subjects get/update
     reminders.py          # Background email reminder dispatcher
     dashboard.py          # Aggregator for the all-in-view dashboard payload
-    _constants.py         # SUBJECT_ALIASES, TYPE_KEYWORDS, URGENCY_THRESHOLDS, ...
+    exams.py              # VCE 2026 exam timetable constants + callable (§13)
+    _constants.py         # SUBJECT_GROUPS/ALIASES, TYPE_KEYWORDS, URGENCY_THRESHOLDS, ...
     _auth.py              # _require_user(), _own_or_raise(row, user)
     _datetime.py          # _user_today, _user_now, _format_date_au, _urgency_band
   theme/
@@ -60,7 +70,7 @@ Per `IMPLEMENTATION_SPEC.md` §0:
 - Server modules: `snake_case.py`; functions are `snake_case`, verb-first; constants are `UPPER_SNAKE_CASE`.
 - Forms: `PascalCase`, suffix `Form`; built fully programmatically (no designer YAML, no `init_components()`).
 - Every `@anvil.server.callable` calls `_require_user()` first and `_own_or_raise(row, user)` before any row-scoped read or write.
-- URL hashes: `#dashboard`, `#notes`, `#settings`, `#import-export`, `#login`.
+- URL hashes: `#dashboard`, `#notes`, `#exams`, `#settings`, `#import-export`, `#login`, `#onboarding`.
 
 ## Setting up
 
