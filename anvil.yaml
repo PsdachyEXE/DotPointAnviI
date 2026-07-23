@@ -242,6 +242,18 @@ native_deps:
       box-shadow:none !important; }
     .form-control:focus { border-color:#2f6fd0 !important;
       box-shadow:0 0 0 3px rgba(47,111,208,.15) !important; }
+
+    /* Chips: role='chip' — small rounded subject/type tags */
+    .anvil-role-chip { display:inline-block; background:#eef2f7;
+      border:1px solid #e0e6ee; border-radius:999px !important;
+      padding:1px 10px !important; margin:0 2px !important; }
+    .anvil-role-chip, .anvil-role-chip * { font-size:11px !important;
+      color:#4b5563 !important; font-weight:600 !important; }
+
+    /* Auth card: role='authcard' — centered login panel */
+    .anvil-role-authcard { background:#ffffff; border:1px solid #e5e7eb;
+      border-radius:14px; box-shadow:0 4px 16px rgba(16,24,40,.08);
+      max-width:420px; margin:0 auto !important; padding:36px 32px !important; }
     </style>
 package_name: DotPoint
 runtime_options:

@@ -31,22 +31,29 @@ class LoginForm(ColumnPanel):
         self.spacing_above = 'none'
         self.spacing_below = 'none'
 
-        self.add_component(Spacer(height=64))
-        self.add_component(Label(text='DotPoint', align='center',
-                                 font_size=44, bold=True))
-        self.add_component(Label(text='Assessment Tracker', align='center',
-                                 font_size=18, foreground='#777777'))
-        self.add_component(Spacer(height=28))
+        self.add_component(Spacer(height=72))
+
+        card = ColumnPanel(role='authcard')
+        card.add_component(Label(text='DotPoint', align='center',
+                                 font_size=40, bold=True))
+        card.add_component(Label(text='Assessment Tracker', align='center',
+                                 font_size=16, foreground='#6b7280'))
+        card.add_component(Label(
+            text='Type "Methods SAC2 due Friday week 5 worth 25%" and it\'s tracked.',
+            align='center', font_size=12, italic=True, foreground='#9aa0a6'))
+        card.add_component(Spacer(height=20))
 
         sign_in = Button(text='Sign in', role='primary', align='center')
         sign_in.set_event_handler('click', self._on_sign_in_click)
-        self.add_component(sign_in)
+        card.add_component(sign_in)
 
-        self.add_component(Spacer(height=8))
+        card.add_component(Spacer(height=6))
 
         sign_up = Button(text='Create an account', role='secondary', align='center')
         sign_up.set_event_handler('click', self._on_sign_up_click)
-        self.add_component(sign_up)
+        card.add_component(sign_up)
+
+        self.add_component(card)
 
     # --- credential prompt -------------------------------------------------
     def _prompt_credentials(self, title, action_label):
