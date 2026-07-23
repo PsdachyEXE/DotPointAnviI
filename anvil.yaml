@@ -246,9 +246,20 @@ native_deps:
 package_name: DotPoint
 runtime_options:
   client_version: '3'
+  server_spec: {}
   server_version: python3-full
   version: 2
-scheduled_tasks: []
+scheduled_tasks:
+- job_id: ZONOLIGB
+  task_name: run_reminder_check
+  time_spec:
+    at: {}
+    every: minute
+    n: 30
+secrets:
+  DEV_EMAIL:
+    type: secret
+    value: {MTQOPIOCMH5RWV5A: jWsuBN9RBO1AqdbE7Om/OT9pJnW+aFJPWaNshbklABLFacXe7Q0a90hZUQ0YCZznOrL4kvX05rhEpE632mwrxgzHBlAACny4iMoWQ2g6Wb0R16lOx8GKJ5kH7zRmfYEedekKlJcy5nWFQ785erxPDh2TEMzHfZ0=}
 services:
 - client_config: {}
   server_config: {auto_create_missing_columns: false}
@@ -256,4 +267,7 @@ services:
 - client_config: {allow_remembered_logins: true, allow_signup: true, allow_signups: true, confirm_email: false, enable_automatically: true, enable_password_reset_email: true, n_password_failures: 10, remember_me_days: 7, require_secure_passwords: true, share_login_status: true, use_email: true, use_mfa: false, use_token: true}
   server_config: {user_table: users}
   source: /runtime/services/anvil/users.yml
+- client_config: {}
+  server_config: {}
+  source: /runtime/services/anvil/secrets.yml
 startup: {module: Main, type: form}
