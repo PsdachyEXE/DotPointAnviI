@@ -26,12 +26,32 @@ from anvil import (
     CheckBox, Button, Notification,
 )
 
-# Canonical subjects (mirror of set(_constants.SUBJECT_ALIASES.values()); the
-# client cannot import server modules, so the list is duplicated here).
+# Full canonical catalog (mirror of _constants.CANONICAL_SUBJECTS plus the
+# generic 'Mathematics' the parser can emit; the client cannot import server
+# modules, so the list is duplicated here). The dropdown shows the student's
+# LOCKED subjects (spec §11) when available — this full list is the fallback
+# and the validity check for bulk auto-create.
 SUBJECTS = (
-    'Mathematics', 'Mathematical Methods', 'Specialist Mathematics',
-    'Further Mathematics', 'English', 'Chemistry', 'Biology', 'Physics',
-    'Software Development', 'Geography', 'Physical Education',
+    'English', 'English as an Additional Language', 'English Language',
+    'Literature',
+    'Mathematics', 'Foundation Mathematics', 'General Mathematics',
+    'Mathematical Methods', 'Specialist Mathematics',
+    'Biology', 'Chemistry', 'Environmental Science', 'Physics', 'Psychology',
+    'Classical Studies', 'Geography', 'History: Ancient History',
+    'History: Australian History', 'History: Revolutions', 'Philosophy',
+    'Politics', 'Religion and Society', 'Sociology', 'Texts and Traditions',
+    'Accounting', 'Business Management', 'Economics', 'Industry and Enterprise',
+    'Legal Studies',
+    'Algorithmics', 'Applied Computing', 'Data Analytics', 'Food Studies',
+    'Product Design and Technologies', 'Software Development',
+    'Systems Engineering',
+    'Art Creative Practice', 'Art Making and Exhibiting', 'Dance', 'Drama',
+    'Media', 'Music', 'Theatre Studies', 'Visual Communication Design',
+    'Health and Human Development', 'Outdoor and Environmental Studies',
+    'Physical Education',
+    'Chinese', 'French', 'German', 'Greek', 'Indonesian', 'Italian',
+    'Japanese', 'Spanish', 'Vietnamese',
+    'Extended Investigation',
 )
 
 # DropDown items as (display, value) pairs — value is the stored canonical enum.
@@ -110,8 +130,12 @@ class AssessmentEditorForm(ColumnPanel):
         body.add_component(self._title_tb)
 
         # --- subject ---
+        # The dropdown offers the student's locked subjects (spec §11) when
+        # they've onboarded; out-of-list values (legacy rows, parser fallback
+        # hits) are appended on load so nothing becomes uneditable.
         body.add_component(Label(text='Subject'))
-        self._subject_dd = DropDown(items=list(SUBJECTS), include_placeholder=True)
+        self._subject_dd = DropDown(items=self._subject_items(),
+                                    include_placeholder=True)
         body.add_component(self._subject_dd)
         self._add_why(body, why, 'subject')
 
@@ -187,6 +211,26 @@ class AssessmentEditorForm(ColumnPanel):
         self._load()
 
     # --- helpers -----------------------------------------------------------
+    def _subject_items(self):
+        """The student's locked subjects (session-cached settings), falling
+        back to the full canonical catalog pre-onboarding."""
+        try:
+            from ..common import get_session_settings
+            locked = get_session_settings().get('subjects')
+        except Exception:
+            locked = None
+        return list(locked) if locked else list(SUBJECTS)
+
+    def _select_subject(self, subject):
+        """Select `subject` in the dropdown, appending it if out-of-list."""
+        if not subject:
+            return
+        items = list(self._subject_dd.items)
+        if subject not in items:
+            items.append(subject)
+            self._subject_dd.items = items
+        self._subject_dd.selected_value = subject
+
     def _add_why(self, parent, why, key):
         """In preview mode, show the parser's provenance string under a field."""
         if why and key in why:
@@ -197,7 +241,8 @@ class AssessmentEditorForm(ColumnPanel):
         """Populate fields from prefill (preview) or the server (edit)."""
         default_days = [7, 2]
         try:
-            settings = anvil.server.call('get_settings')
+            from ..common import get_session_settings
+            settings = get_session_settings()
             default_days = settings.get('default_reminder_days') or [7, 2]
         except Exception:
             pass
@@ -206,7 +251,7 @@ class AssessmentEditorForm(ColumnPanel):
             f = self._prefill.get('fields', {})
             self._title_tb.text = f.get('title') or ''
             if f.get('subject') in SUBJECTS:
-                self._subject_dd.selected_value = f.get('subject')
+                self._select_subject(f.get('subject'))
             if f.get('type'):
                 self._type_dd.selected_value = f.get('type')
             self._due_dp.date = f.get('due_date')
@@ -221,7 +266,7 @@ class AssessmentEditorForm(ColumnPanel):
                 Notification("Couldn't load assessment: %s" % e, style='danger', timeout=4).show()
                 return
             self._title_tb.text = a.get('title') or ''
-            self._subject_dd.selected_value = a.get('subject')
+            self._select_subject(a.get('subject'))
             self._type_dd.selected_value = a.get('type')
             self._due_dp.date = _from_iso(a.get('due_date'))
             self._start_dp.date = _from_iso(a.get('start_date'))

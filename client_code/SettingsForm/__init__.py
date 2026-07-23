@@ -1,16 +1,22 @@
 import anvil.tables as tables
 import anvil.tables.query as q
 from anvil.tables import app_tables
-"""SettingsForm - per-user preferences (reminders, school year/terms, timezone).
+"""SettingsForm - per-user preferences (reminders, school year/terms, timezone,
+theme, and the deliberate change-subjects flow).
 
 Resolves Pending Decision 2 (timezone) end-to-end: the timezone dropdown writes
 user_settings.timezone, which drives all server-side "today" / date-math.
 
-Theme has no UI control in MVP (a placeholder label stands in); the column
-exists for a future release.
+Theme (spec §12): a light/dark dropdown saved via update_settings and applied
+immediately through common.apply_theme.
+
+Subjects (spec §11): locked after onboarding; the 'Change subjects…' button is
+the only way to alter them — a confirm dialog explains the consequences, then
+the shared common.SubjectPicker re-runs the same client-side checks as
+onboarding and notes.set_subjects re-applies the server-side VCE rules.
 
 See IMPLEMENTATION_SPEC.md section 3 (SettingsForm) and section 2
-(notes.get_settings / notes.update_settings).
+(notes.get_settings / notes.update_settings / notes.set_subjects).
 """
 
 import anvil
@@ -18,10 +24,19 @@ import anvil.server
 import datetime
 from anvil import (
     ColumnPanel, FlowPanel, Label, CheckBox, DatePicker, TextBox, DropDown,
-    Button, Link, Notification,
+    Button, Link, Notification, alert, confirm,
 )
 
-from ..common import make_top_bar
+from ..common import (
+    make_top_bar, SubjectPicker, apply_theme, set_session_settings,
+)
+
+# Mirrors _constants.ENGLISH_GROUP / MATHS_GROUP (client can't import server
+# modules; keep in sync with OnboardingForm).
+ENGLISH_GROUP = ('English', 'English as an Additional Language',
+                 'English Language', 'Literature')
+MATHS_GROUP = ('Foundation Mathematics', 'General Mathematics',
+               'Mathematical Methods', 'Specialist Mathematics')
 
 # Reminder-day options offered in the UI (spec §3): N days before due date.
 REMINDER_DAY_OPTIONS = (14, 7, 3, 2, 1)
@@ -114,15 +129,29 @@ class SettingsForm(ColumnPanel):
         self._timezone_dd = DropDown(items=list(TIMEZONES))
         body.add_component(self._timezone_dd)
 
-        # --- Theme (no control in MVP) ---
+        # --- Theme (spec §12) ---
         body.add_component(Label(text='Theme', role='heading'))
-        body.add_component(Label(text='Theme control coming in a future release.'))
+        self._theme_dd = DropDown(items=[('Light', 'light'), ('Dark', 'dark')])
+        body.add_component(self._theme_dd)
+
+        # --- Subjects (spec §11: locked; deliberate change flow only) ---
+        body.add_component(Label(text='My subjects', role='heading'))
+        self._subjects_row = FlowPanel()
+        body.add_component(self._subjects_row)
+        body.add_component(Label(
+            text='Subjects are locked in — they drive the parser, dashboard '
+                 'and exam timetable.',
+            font_size=12, italic=True, foreground='#9aa0a6'))
+        change_btn = Button(text='Change subjects…', role='secondary')
+        change_btn.set_event_handler('click', self._on_change_subjects)
+        body.add_component(change_btn)
 
         # --- Save ---
         save_btn = Button(text='Save', role='primary')
         save_btn.set_event_handler('click', self._on_save_click)
         body.add_component(save_btn)
 
+        self._subjects = []
         self._load_settings()
 
     def _load_settings(self):
@@ -157,6 +186,63 @@ class SettingsForm(ColumnPanel):
             # Keep an out-of-list stored value selectable.
             self._timezone_dd.items = list(TIMEZONES) + [tz]
         self._timezone_dd.selected_value = tz
+
+        self._theme_dd.selected_value = s.get('theme') or 'light'
+        self._subjects = s.get('subjects') or []
+        self._render_subject_chips()
+
+    def _render_subject_chips(self):
+        self._subjects_row.clear()
+        if not self._subjects:
+            self._subjects_row.add_component(Label(
+                text='No subjects locked in yet.', italic=True,
+                foreground='#9aa0a6'))
+            return
+        for s in self._subjects:
+            self._subjects_row.add_component(Label(text=s, role='chip'))
+
+    def _on_change_subjects(self, **event_args):
+        proceed = confirm(
+            "Changing your subjects re-tailors the parser, dashboard filter "
+            "and exam timetable. Assessments you've already saved keep their "
+            "subject either way. Continue?")
+        if not proceed:
+            return
+
+        try:
+            catalog = anvil.server.call('get_subject_catalog')
+        except Exception as e:
+            Notification("Couldn't load the subject list: %s" % e,
+                         style='danger', timeout=4).show()
+            return
+
+        picker = SubjectPicker(catalog, selected=self._subjects)
+        if not alert(picker, title='Change subjects', large=True,
+                     buttons=[('Save subjects', True), ('Cancel', False)]):
+            return
+
+        selection = picker.get_selection()
+        if not any(s in MATHS_GROUP for s in selection):
+            Notification("Select at least one mathematics study.",
+                         style='danger', timeout=6).show()
+            return
+        if not any(s in ENGLISH_GROUP for s in selection):
+            if not confirm(
+                    "No English-group study selected — 'English' will be "
+                    "added automatically (every VCE program includes one). "
+                    "Continue?"):
+                return
+
+        try:
+            settings = anvil.server.call('set_subjects', selection)
+        except Exception as e:
+            Notification(str(e), style='danger', timeout=6).show()
+            return
+
+        set_session_settings(settings)
+        self._subjects = settings.get('subjects') or []
+        self._render_subject_chips()
+        Notification("Subjects updated.", style='success', timeout=4).show()
 
     def _on_load_preset(self, **event_args):
         """Fill the term pickers with the VIC 2026 dates (user still clicks Save)."""
@@ -200,8 +286,14 @@ class SettingsForm(ColumnPanel):
         if tz:
             fields['timezone'] = tz
 
+        theme = self._theme_dd.selected_value
+        if theme:
+            fields['theme'] = theme
+
         try:
-            anvil.server.call('update_settings', fields)
+            settings = anvil.server.call('update_settings', fields)
+            set_session_settings(settings)
+            apply_theme(settings.get('theme'))
             Notification("Settings saved.", style='success', timeout=4).show()
         except Exception as e:
             Notification("Couldn't save settings: %s" % e, style='danger', timeout=4).show()

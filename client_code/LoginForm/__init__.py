@@ -92,5 +92,9 @@ class LoginForm(ColumnPanel):
         except Exception as e:
             Notification(str(e), style='danger', timeout=4).show()
             return
+        # Fresh account context: never reuse a previous session's cached
+        # settings (theme / onboarding gate read them on the next route).
+        from ..common import clear_session_settings
+        clear_session_settings()
         anvil.set_url_hash('dashboard')
         open_form('Main')

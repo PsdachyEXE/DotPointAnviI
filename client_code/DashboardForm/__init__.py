@@ -105,6 +105,10 @@ class DashboardForm(ColumnPanel):
         self._hint_panel = ColumnPanel()
         body.add_component(self._hint_panel)
 
+        # Next-exam countdown chip slot (spec §13).
+        self._exam_chip_panel = ColumnPanel()
+        body.add_component(self._exam_chip_panel)
+
         body.add_component(Spacer(height=8))
 
         # --- three-panel body (list | calendar | upcoming) ---
@@ -146,6 +150,7 @@ class DashboardForm(ColumnPanel):
             return
         self._populate_subjects(data.get('subjects', []))
         self._render_hint(data.get('settings', {}))
+        self._render_exam_chip(data.get('next_exam'))
         self._render_list(data.get('assessment_list', []))
         self._render_calendar(data.get('calendar', {}))
         self._render_upcoming(data.get('upcoming', []))
@@ -167,6 +172,33 @@ class DashboardForm(ColumnPanel):
     def _go_settings(self):
         from ..common import _navigate
         _navigate('settings')
+
+    def _render_exam_chip(self, next_exam):
+        """Countdown chip for the next VCE written exam (spec §13)."""
+        self._exam_chip_panel.clear()
+        if not next_exam:
+            return
+        days = next_exam.get('days_remaining')
+        chip = FlowPanel(role='card')
+        chip.add_component(Label(text='▲', foreground='#7c3aed', bold=True))
+        chip.add_component(Label(
+            text='Next exam: %s (%s)' % (next_exam.get('subject'),
+                                         next_exam.get('paper')), bold=True))
+        if days == 0:
+            when = 'TODAY'
+        elif days == 1:
+            when = 'tomorrow'
+        else:
+            when = 'in %d days' % days
+        chip.add_component(Label(text=when, bold=True, foreground='#7c3aed'))
+        go = Link(text='Exam timetable', foreground='#2f6fd0')
+        go.set_event_handler('click', lambda **e: self._go_exams())
+        chip.add_component(go)
+        self._exam_chip_panel.add_component(chip)
+
+    def _go_exams(self):
+        from ..common import _navigate
+        _navigate('exams')
 
     def _populate_subjects(self, subjects):
         current = self._subject_dd.selected_value
@@ -257,6 +289,7 @@ class DashboardForm(ColumnPanel):
         weeks = cal.get('weeks') or []
         colours = cal.get('cell_colours') or {}
         self._day_buckets = cal.get('day_buckets') or {}
+        self._exam_days = cal.get('exam_days') or {}
 
         nav = FlowPanel()
         prev_btn = Button(text='◀', role='secondary')
@@ -285,12 +318,18 @@ class DashboardForm(ColumnPanel):
                     cell = Label(text=' ')
                 else:
                     band = _cell(colours, day)
-                    if band:
+                    has_exam = bool(_cell(self._exam_days, day))
+                    if band or has_exam:
                         # Coloured bold day number (white-on-background renders
                         # unreliably in this theme). Clickable: opens the day's
-                        # assessments from the payload's day_buckets.
-                        cell = Link(text='● %d' % day, bold=True,
-                                    foreground=_URGENCY_COLOURS.get(band, '#9aa0a6'))
+                        # assessments/exams popup. '▲' marks a VCE exam day
+                        # (spec §13); exam-only days show purple.
+                        text = ('● %d' % day) if band else str(day)
+                        if has_exam:
+                            text += ' ▲'
+                        colour = (_URGENCY_COLOURS.get(band, '#9aa0a6')
+                                  if band else '#7c3aed')
+                        cell = Link(text=text, bold=True, foreground=colour)
                         cell.set_event_handler(
                             'click', lambda d=day, **e: self._on_day_click(d))
                     else:
@@ -299,11 +338,18 @@ class DashboardForm(ColumnPanel):
             self._calendar_panel.add_component(row)
 
     def _on_day_click(self, day):
-        """Show the clicked calendar day's assessments (from day_buckets)."""
+        """Show the clicked calendar day's assessments and VCE exams."""
         items = _cell(getattr(self, '_day_buckets', {}), day) or []
+        exams = _cell(getattr(self, '_exam_days', {}), day) or []
         panel = ColumnPanel()
-        if not items:
+        if not items and not exams:
             panel.add_component(Label(text='Nothing due this day.'))
+        for label in exams:
+            row = FlowPanel()
+            row.add_component(Label(text='▲', foreground='#7c3aed', bold=True))
+            row.add_component(Label(text='VCE exam: %s' % label, bold=True,
+                                    foreground='#7c3aed'))
+            panel.add_component(row)
         for a in items:
             row = FlowPanel()
             band = a.get('urgency_band', 'distant')
@@ -313,7 +359,7 @@ class DashboardForm(ColumnPanel):
                 a.get('subject') or '', _TYPE_LABELS.get(a.get('type'), '')),
                 foreground='#9aa0a6'))
             panel.add_component(row)
-        title = (items[0].get('due_display') if items else '') or 'Due this day'
+        title = (items[0].get('due_display') if items else '') or 'This day'
         alert(panel, title=title, large=False, buttons=[('Close', None)])
 
     def _change_month(self, delta):

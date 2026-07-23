@@ -161,6 +161,10 @@ db_schema:
       client_hidden: false
       name: timezone
       type: string
+    - admin_ui: {width: 200}
+      client_hidden: false
+      name: subjects
+      type: simpleObject
     indexes: []
     server: full
     title: user_settings
@@ -203,57 +207,95 @@ metadata: {description: 'Assessment tracker for VCE students (Anvil port of C:\C
 native_deps:
   head_html: |
     <style>
-    /* ---- DotPoint light theme (SAT 5 §2 design language) ---- */
-    body { background:#f5f7fa !important; color:#1f2933;
+    /* ---- DotPoint theme (SAT 5 §2 design language) ----
+       All colours are CSS variables so the Settings theme picker can flip the
+       whole app between light (default) and dark by toggling body.dotpoint-dark
+       (see client_code/common.apply_theme). */
+    :root {
+      --dp-bg:#f5f7fa;          --dp-text:#1f2933;
+      --dp-surface:#ffffff;     --dp-border:#e5e7eb;
+      --dp-heading:#111827;     --dp-muted:#6b7280;
+      --dp-accent:#2f6fd0;      --dp-accent-hover:#245ab0;
+      --dp-btn2-bg:#ffffff;     --dp-btn2-text:#374151;
+      --dp-btn2-hover:#f3f4f6;  --dp-input-border:#d1d5db;
+      --dp-chip-bg:#eef2f7;     --dp-chip-border:#e0e6ee;
+      --dp-chip-text:#4b5563;
+      --dp-shadow:rgba(16,24,40,.06); --dp-shadow-lg:rgba(16,24,40,.08);
+    }
+    body.dotpoint-dark {
+      --dp-bg:#0f172a;          --dp-text:#e2e8f0;
+      --dp-surface:#1e293b;     --dp-border:#334155;
+      --dp-heading:#f1f5f9;     --dp-muted:#94a3b8;
+      --dp-accent:#3b82f6;      --dp-accent-hover:#2563eb;
+      --dp-btn2-bg:#1e293b;     --dp-btn2-text:#cbd5e1;
+      --dp-btn2-hover:#334155;  --dp-input-border:#475569;
+      --dp-chip-bg:#334155;     --dp-chip-border:#475569;
+      --dp-chip-text:#cbd5e1;
+      --dp-shadow:rgba(0,0,0,.35); --dp-shadow-lg:rgba(0,0,0,.5);
+    }
+
+    body { background:var(--dp-bg) !important; color:var(--dp-text);
            font-family:'Segoe UI',system-ui,-apple-system,Roboto,Arial,sans-serif; }
-    a, .anvil-component a { color:#2f6fd0; }
+    a, .anvil-component a { color:var(--dp-accent); }
 
     /* Buttons: role='primary' (blue CTA) / role='secondary' (ghost) */
     .anvil-role-primary button {
-      background:#2f6fd0 !important; color:#ffffff !important;
-      border:1px solid #2f6fd0 !important; border-radius:8px !important;
+      background:var(--dp-accent) !important; color:#ffffff !important;
+      border:1px solid var(--dp-accent) !important; border-radius:8px !important;
       padding:6px 18px !important; font-weight:600 !important; }
-    .anvil-role-primary button:hover { background:#245ab0 !important; }
+    .anvil-role-primary button:hover { background:var(--dp-accent-hover) !important; }
     .anvil-role-secondary button {
-      background:#ffffff !important; color:#374151 !important;
-      border:1px solid #d1d5db !important; border-radius:8px !important;
+      background:var(--dp-btn2-bg) !important; color:var(--dp-btn2-text) !important;
+      border:1px solid var(--dp-input-border) !important; border-radius:8px !important;
       padding:5px 14px !important; }
-    .anvil-role-secondary button:hover { background:#f3f4f6 !important; }
+    .anvil-role-secondary button:hover { background:var(--dp-btn2-hover) !important; }
 
     /* Headings: role='heading' */
     .anvil-role-heading, .anvil-role-heading * {
-      font-weight:700 !important; color:#111827; }
+      font-weight:700 !important; color:var(--dp-heading); }
 
-    /* Cards: role='card' — white surface, soft border + shadow */
+    /* Cards: role='card' — surface, soft border + shadow */
     .anvil-role-card {
-      background:#ffffff; border:1px solid #e5e7eb; border-radius:10px;
-      box-shadow:0 1px 3px rgba(16,24,40,.06);
+      background:var(--dp-surface); border:1px solid var(--dp-border);
+      border-radius:10px; box-shadow:0 1px 3px var(--dp-shadow);
       padding:12px 16px !important; margin:8px 0 !important; }
 
     /* Top navigation bar: role='topbar' */
     .anvil-role-topbar {
-      background:#ffffff; border-bottom:1px solid #e5e7eb;
+      background:var(--dp-surface); border-bottom:1px solid var(--dp-border);
       padding:10px 16px !important; margin-bottom:10px !important;
-      box-shadow:0 1px 2px rgba(16,24,40,.04); }
+      box-shadow:0 1px 2px var(--dp-shadow); }
 
     /* Inputs (TextBox / TextArea / DropDown / DatePicker) */
     .form-control, select.form-control, textarea.form-control {
-      border-radius:8px !important; border:1px solid #d1d5db !important;
+      border-radius:8px !important; border:1px solid var(--dp-input-border) !important;
+      background:var(--dp-surface) !important; color:var(--dp-text) !important;
       box-shadow:none !important; }
-    .form-control:focus { border-color:#2f6fd0 !important;
+    .form-control:focus { border-color:var(--dp-accent) !important;
       box-shadow:0 0 0 3px rgba(47,111,208,.15) !important; }
 
     /* Chips: role='chip' — small rounded subject/type tags */
-    .anvil-role-chip { display:inline-block; background:#eef2f7;
-      border:1px solid #e0e6ee; border-radius:999px !important;
+    .anvil-role-chip { display:inline-block; background:var(--dp-chip-bg);
+      border:1px solid var(--dp-chip-border); border-radius:999px !important;
       padding:1px 10px !important; margin:0 2px !important; }
     .anvil-role-chip, .anvil-role-chip * { font-size:11px !important;
-      color:#4b5563 !important; font-weight:600 !important; }
+      color:var(--dp-chip-text) !important; font-weight:600 !important; }
 
     /* Auth card: role='authcard' — centered login panel */
-    .anvil-role-authcard { background:#ffffff; border:1px solid #e5e7eb;
-      border-radius:14px; box-shadow:0 4px 16px rgba(16,24,40,.08);
+    .anvil-role-authcard { background:var(--dp-surface);
+      border:1px solid var(--dp-border);
+      border-radius:14px; box-shadow:0 4px 16px var(--dp-shadow-lg);
       max-width:420px; margin:0 auto !important; padding:36px 32px !important; }
+
+    /* Modals (alert dialogs) follow the theme too */
+    .modal-content { background:var(--dp-surface) !important;
+      color:var(--dp-text) !important; }
+    .modal-content .modal-header, .modal-content .modal-footer {
+      border-color:var(--dp-border) !important; }
+
+    /* Default label text inside themed containers */
+    body.dotpoint-dark .anvil-label,
+    body.dotpoint-dark .anvil-label * { color:var(--dp-text); }
     </style>
 package_name: DotPoint
 runtime_options:
