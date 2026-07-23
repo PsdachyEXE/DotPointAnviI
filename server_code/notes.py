@@ -7,6 +7,12 @@ from anvil.tables import app_tables
 Settings surface (§10 step 1): get_settings, update_settings
 (+ _get_or_create_settings, _settings_row_to_dict).
 
+Subject onboarding surface (§11): get_subject_catalog, set_subjects.
+user_settings.subjects holds the student's locked-in VCE studies; it is
+deliberately NOT in the update_settings whitelist — set_subjects is the only
+writer, so the VCE program rules (>=1 maths, English group always present)
+cannot be bypassed.
+
 Note CRUD + search (§10 step 6): create_note, update_note, delete_note,
 toggle_pin, search_notes (+ _note_row_to_dict, _validate_note_fields).
 delete_note also unlinks the note from any of the user's assessments.
@@ -20,17 +26,23 @@ import anvil.users
 import datetime
 
 from ._auth import _require_user, _own_or_raise
-from ._constants import EDITABLE_FIELDS_NOTE
+from ._constants import (
+    EDITABLE_FIELDS_NOTE, SUBJECT_GROUPS, CANONICAL_SUBJECTS,
+    ENGLISH_GROUP, MATHS_GROUP,
+)
 from ._datetime import _get_tz
 
-# Defaults for a freshly created user_settings row (spec §1).
+# Defaults for a freshly created user_settings row (spec §1). subjects=None
+# means "not onboarded yet": the Main router gates such users into
+# OnboardingForm until set_subjects has run once.
 _SETTINGS_DEFAULTS = {
-    'theme': 'dark',
+    'theme': 'light',
     'default_reminder_days': [7, 2],
     'notifications_enabled': True,
     'school_year': None,
     'school_terms': [],
     'timezone': 'Australia/Melbourne',  # Pending Decision 2 (A)
+    'subjects': None,
 }
 
 # Whitelist of client-updatable settings keys (spec §2 update_settings).
@@ -57,15 +69,25 @@ def _get_or_create_settings(user) -> "tables.Row":
     return app_tables.user_settings.add_row(user=user, **_SETTINGS_DEFAULTS)
 
 
+def _row_value(row, key, default=None):
+    """row[key], tolerating a column that doesn't exist yet (pre-migration DB)."""
+    try:
+        value = row[key]
+    except Exception:
+        return default
+    return default if value is None else value
+
+
 def _settings_row_to_dict(row) -> dict:
     """Plain-dict view of a settings row (no live Row object leaves the server)."""
     return {
-        'theme': row['theme'] or 'dark',
+        'theme': row['theme'] or 'light',
         'default_reminder_days': row['default_reminder_days'] or [],
         'notifications_enabled': bool(row['notifications_enabled']),
         'school_year': row['school_year'],
         'school_terms': row['school_terms'] or [],
         'timezone': row['timezone'] or 'Australia/Melbourne',
+        'subjects': _row_value(row, 'subjects') or [],
     }
 
 
@@ -88,6 +110,64 @@ def update_settings(fields: dict) -> dict:
     _validate_settings(clean)
     if clean:
         row.update(**clean)
+    return _settings_row_to_dict(row)
+
+
+# --- subject onboarding (spec §11) ------------------------------------------
+
+@anvil.server.callable
+def get_subject_catalog() -> list:
+    """The picker catalog: [{'group': <area>, 'subjects': [<canonical>, ...]}, ...]."""
+    _require_user()
+    return [{'group': g, 'subjects': list(subs)} for g, subs in SUBJECT_GROUPS]
+
+
+def _clean_subjects(subjects) -> list:
+    """Validate a subject selection against the catalog and VCE rules.
+
+    Rules (spec §11): every entry must be a catalog subject; at least one
+    mathematics study is required (DotPoint client mandate); if no
+    English-group study was chosen, 'English' is appended automatically —
+    every VCE program includes an English-group study (VCAA), so the app
+    never lets a student track a program without one.
+    """
+    if not isinstance(subjects, list):
+        raise ValueError("subjects must be a list")
+
+    catalog = set(CANONICAL_SUBJECTS)
+    seen, clean = set(), []
+    for s in subjects:
+        if not isinstance(s, str):
+            raise ValueError("each subject must be a string")
+        name = s.strip()
+        if name not in catalog:
+            raise ValueError("unknown subject: %r" % name)
+        if name not in seen:
+            seen.add(name)
+            clean.append(name)
+
+    if len(clean) > 12:
+        raise ValueError("that's more than 12 subjects — pick your actual program")
+
+    if not any(s in MATHS_GROUP for s in clean):
+        raise ValueError(
+            "Select at least one mathematics study (Foundation, General, "
+            "Methods or Specialist).")
+
+    if not any(s in ENGLISH_GROUP for s in clean):
+        clean.append('English')
+
+    return clean
+
+
+@anvil.server.callable
+def set_subjects(subjects: list) -> dict:
+    """Validate and lock in the user's VCE subjects; the sole writer of
+    user_settings.subjects. Used by onboarding and the Settings change flow."""
+    user = _require_user()
+    row = _get_or_create_settings(user)
+    clean = _clean_subjects(subjects)
+    row.update(subjects=clean)
     return _settings_row_to_dict(row)
 
 

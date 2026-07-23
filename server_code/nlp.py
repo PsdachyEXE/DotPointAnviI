@@ -31,8 +31,8 @@ import datetime
 
 from ._auth import _require_user
 from ._datetime import _user_today
-from ._constants import SUBJECT_ALIASES, TYPE_KEYWORDS
-from .notes import _get_or_create_settings
+from ._constants import SUBJECT_ALIASES, TYPE_KEYWORDS, MATHS_GROUP
+from .notes import _get_or_create_settings, _row_value
 
 # dateparser is an optional third-party fallback (spec section 7) for free-form
 # English dates the regex chain misses. Guarded so the module works without it.
@@ -85,24 +85,46 @@ def _tokenise(s: str) -> list:
 
 # --- field matchers --------------------------------------------------------
 
-def _match_subject(text: str, tokens: list):
-    """Return (canonical_subject, matched_alias) or (None, None).
+def _match_subject_in(aliases: dict, text: str, tokens: list):
+    """Match one alias table against the input; the shared matching core.
 
     Multi-word aliases ('math methods', 'phys ed') are tried first, longest
     first, so 'methods' does not pre-empt 'math methods'. Then single tokens.
     """
     low = text.lower()
     multi = sorted(
-        (a for a in SUBJECT_ALIASES if ' ' in a), key=len, reverse=True
+        (a for a in aliases if ' ' in a), key=len, reverse=True
     )
     for alias in multi:
         if re.search(r'\b' + re.escape(alias) + r'\b', low):
-            return SUBJECT_ALIASES[alias], alias
+            return aliases[alias], alias
     for tok in tokens:
         key = tok.lower().strip('.,;:!?')
-        if key in SUBJECT_ALIASES:
-            return SUBJECT_ALIASES[key], key
+        if key in aliases:
+            return aliases[key], key
     return None, None
+
+
+def _match_subject(text: str, tokens: list, user_subjects=None):
+    """Return (canonical_subject, matched_alias) or (None, None).
+
+    When the student has locked-in subjects (spec §11), aliases for THOSE
+    subjects are tried first, so e.g. 'lit' can't be shadowed by an alias of a
+    subject they don't take; the full alias table remains as fallback. Bonus
+    remap: a student with exactly one locked maths study gets bare
+    'math'/'maths' pointed at it instead of the generic 'Mathematics'.
+    """
+    if user_subjects:
+        chosen = set(user_subjects)
+        priority = {a: c for a, c in SUBJECT_ALIASES.items() if c in chosen}
+        maths = [s for s in user_subjects if s in MATHS_GROUP]
+        if len(maths) == 1:
+            for alias in ('math', 'maths', 'mathematics'):
+                priority[alias] = maths[0]
+        subject, alias = _match_subject_in(priority, text, tokens)
+        if subject is not None:
+            return subject, alias
+    return _match_subject_in(SUBJECT_ALIASES, text, tokens)
 
 
 def _match_type(text: str):
@@ -343,7 +365,8 @@ def _parse_one(line: str, today: datetime.date, settings_row) -> dict:
     line = (line or '').strip()
     tokens = _tokenise(line)
 
-    subject, subject_src = _match_subject(line, tokens)
+    user_subjects = _row_value(settings_row, 'subjects') if settings_row is not None else None
+    subject, subject_src = _match_subject(line, tokens, user_subjects)
     type_value, type_src = _match_type(line)
     weight, weight_src = _extract_weight(line)
     due_date, date_why, term_info, date_src = _extract_date(line, today, settings_row)
