@@ -13,9 +13,23 @@ Also defines: _urgency_band(days_remaining) — added in the Assessments slice
 """
 
 import datetime
-from zoneinfo import ZoneInfo
 
 from ._constants import URGENCY_THRESHOLDS
+
+# Timezone backend compat: zoneinfo is stdlib on Python 3.9+, but Anvil's
+# default Full-Python-3 server image predates it (and the python310-full base
+# image is not provisionable on this account). Fall back to pytz, which the
+# Anvil server image bundles. Both raise on an unknown zone name.
+try:
+    from zoneinfo import ZoneInfo as _ZoneInfo
+
+    def _get_tz(name: str):
+        return _ZoneInfo(name)
+except ImportError:
+    import pytz
+
+    def _get_tz(name: str):
+        return pytz.timezone(name)
 
 # Pending Decision 2 (A): the user's timezone is stored per-user in
 # user_settings.timezone. This is the fallback when the settings row, or its
@@ -31,7 +45,7 @@ def _user_now(user_settings_row) -> datetime.datetime:
     tz_name = _DEFAULT_TZ
     if user_settings_row is not None and user_settings_row['timezone']:
         tz_name = user_settings_row['timezone']
-    return datetime.datetime.now(ZoneInfo(tz_name))
+    return datetime.datetime.now(_get_tz(tz_name))
 
 
 def _user_today(user_settings_row) -> datetime.date:

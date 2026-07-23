@@ -17,10 +17,10 @@ See IMPLEMENTATION_SPEC.md section 2 (server_code/notes.py) and section 1
 import anvil.server
 import anvil.users
 import datetime
-from zoneinfo import ZoneInfo
 
 from ._auth import _require_user, _own_or_raise
 from ._constants import EDITABLE_FIELDS_NOTE
+from ._datetime import _get_tz
 
 # Defaults for a freshly created user_settings row (spec §1).
 _SETTINGS_DEFAULTS = {
@@ -119,7 +119,7 @@ def _validate_settings(fields: dict) -> None:
         if not isinstance(tz, str):
             raise ValueError("timezone must be a string")
         try:
-            ZoneInfo(tz)
+            _get_tz(tz)
         except Exception:
             raise ValueError("invalid timezone: %r" % tz)
 
