@@ -24,6 +24,7 @@ from ._auth import _require_user, _own_or_raise
 from ._datetime import _user_today, _format_date_au, _urgency_band
 from ._constants import (
     ALLOWED_SORT_KEYS, EDITABLE_FIELDS_ASSESSMENT, SUBJECT_ALIASES,
+    LEGACY_SUBJECT_RENAMES,
 )
 from .notes import (
     _get_or_create_settings, _settings_row_to_dict, _note_row_to_dict,
@@ -68,6 +69,9 @@ def _validate_assessment_payload(record: dict, user) -> dict:
     out['title'] = title.strip()
 
     subject = record.get('subject')
+    # Rows/exports written before a VCAA study rename carry the old name;
+    # coerce so legacy data stays editable and importable.
+    subject = LEGACY_SUBJECT_RENAMES.get(subject, subject)
     if subject not in set(SUBJECT_ALIASES.values()):
         raise ValueError("invalid subject")
     out['subject'] = subject

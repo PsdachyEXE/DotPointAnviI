@@ -80,6 +80,13 @@ MATHS_GROUP = (
     'Mathematical Methods', 'Specialist Mathematics',
 )
 
+# Renamed studies: rows/imports written before a VCAA rename are coerced to
+# the current canonical name at validation time (assessments), so legacy data
+# stays editable and old exports stay importable.
+LEGACY_SUBJECT_RENAMES = {
+    'Further Mathematics': 'General Mathematics',
+}
+
 # SUBJECT_ALIASES maps every lowercased alias the parser might see onto a
 # canonical subject (FR16). Multi-word aliases (e.g. 'math methods', 'phys ed')
 # are matched as phrases before single tokens by nlp._match_subject. Every

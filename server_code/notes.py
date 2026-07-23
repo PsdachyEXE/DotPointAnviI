@@ -146,9 +146,6 @@ def _clean_subjects(subjects) -> list:
             seen.add(name)
             clean.append(name)
 
-    if len(clean) > 12:
-        raise ValueError("that's more than 12 subjects — pick your actual program")
-
     if not any(s in MATHS_GROUP for s in clean):
         raise ValueError(
             "Select at least one mathematics study (Foundation, General, "
@@ -156,6 +153,10 @@ def _clean_subjects(subjects) -> list:
 
     if not any(s in ENGLISH_GROUP for s in clean):
         clean.append('English')
+
+    # Cap AFTER the English auto-add so the stored list can never exceed 12.
+    if len(clean) > 12:
+        raise ValueError("that's more than 12 subjects — pick your actual program")
 
     return clean
 
