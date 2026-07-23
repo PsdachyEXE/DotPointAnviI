@@ -28,6 +28,10 @@ def _build_calendar(year: int, month: int, decorated: list) -> dict:
     Pure function (no DB): `decorated` items carry ISO 'due_date', 'days_remaining'
     and 'urgency_band'. Returns weeks (6x7, 0 = blank), per-day buckets, and the
     highest-urgency colour band per day (most urgent = smallest days_remaining).
+
+    day_buckets / cell_colours are keyed by STR(day) — Anvil refuses to
+    serialize dicts with non-string keys ("Cannot serialize dictionaries with
+    keys that aren't strings"). The client's _cell() helper looks up str keys.
     """
     weeks = _calendar.monthcalendar(year, month)
     day_buckets = {}
@@ -37,12 +41,12 @@ def _build_calendar(year: int, month: int, decorated: list) -> dict:
             continue
         d = datetime.date.fromisoformat(due)
         if d.year == year and d.month == month:
-            day_buckets.setdefault(d.day, []).append(a)
+            day_buckets.setdefault(str(d.day), []).append(a)
 
     cell_colours = {}
-    for day, items in day_buckets.items():
+    for day_key, items in day_buckets.items():
         days = [it['days_remaining'] for it in items if it.get('days_remaining') is not None]
-        cell_colours[day] = _urgency_band(min(days)) if days else 'distant'
+        cell_colours[day_key] = _urgency_band(min(days)) if days else 'distant'
 
     return {
         'year': year,
