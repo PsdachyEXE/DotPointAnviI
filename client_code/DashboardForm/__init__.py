@@ -156,7 +156,7 @@ class DashboardForm(ColumnPanel):
             self._list_panel.add_component(self._make_card(a))
 
     def _make_card(self, a):
-        card = FlowPanel(spacing_above='small', spacing_below='small')
+        card = FlowPanel(spacing_above='small', spacing_below='small', role='card')
         band = a.get('urgency_band', 'distant')
         card.add_component(Label(text=' ', background=_URGENCY_COLOURS.get(band, '#9aa0a6')))
         card.add_component(Label(text=a.get('title') or '(untitled)', bold=True))

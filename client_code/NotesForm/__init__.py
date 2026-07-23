@@ -102,7 +102,7 @@ class NotesForm(ColumnPanel):
             self._list_panel.add_component(self._make_card(n))
 
     def _make_card(self, n):
-        card = ColumnPanel(spacing_above='small', spacing_below='small')
+        card = ColumnPanel(spacing_above='small', spacing_below='small', role='card')
         head = FlowPanel()
         if n.get('is_pinned'):
             head.add_component(Label(text='PINNED', font_size=10, bold=True,

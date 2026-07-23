@@ -33,7 +33,7 @@ def make_top_bar():
     'DotPoint' is the home link (-> dashboard); Notes / Settings / Import-Export
     route via the Main hash router; Sign out logs out and returns to login.
     """
-    bar = FlowPanel()
+    bar = FlowPanel(role='topbar')
 
     title = Link(text='DotPoint', role='heading')
     title.set_event_handler('click', lambda **e: _navigate('dashboard'))
