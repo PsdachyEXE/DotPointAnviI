@@ -59,7 +59,7 @@ class ImportExportForm(ColumnPanel):
         try:
             media = anvil.server.call('export_user_data')
         except Exception as e:
-            Notification("Couldn't export: %s" % e, style='danger').show()
+            Notification("Couldn't export: %s" % e, style='danger', timeout=4).show()
             return
         anvil.media.download(media)
 
@@ -75,7 +75,7 @@ class ImportExportForm(ColumnPanel):
             result = anvil.server.call('import_user_data', file)
         except Exception as e:
             self._status.text = ''
-            Notification("Import failed — nothing was saved. %s" % e, style='danger').show()
+            Notification("Import failed — nothing was saved. %s" % e, style='danger', timeout=4).show()
             self._loader.clear()
             return
         renamed = result.get('renamed') or []
@@ -84,5 +84,5 @@ class ImportExportForm(ColumnPanel):
         if renamed:
             msg += ' %d had duplicate titles and were renamed.' % len(renamed)
         self._status.text = msg
-        Notification(msg, style='success').show()
+        Notification(msg, style='success', timeout=4).show()
         self._loader.clear()

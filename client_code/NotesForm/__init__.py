@@ -155,7 +155,7 @@ class NotesForm(ColumnPanel):
         try:
             anvil.server.call('toggle_pin', note_id)
         except Exception as e:
-            Notification("Couldn't update: %s" % e, style='danger').show()
+            Notification("Couldn't update: %s" % e, style='danger', timeout=4).show()
             return
         self._refresh()
 
@@ -165,6 +165,6 @@ class NotesForm(ColumnPanel):
         try:
             anvil.server.call('delete_note', note_id)
         except Exception as e:
-            Notification("Couldn't delete: %s" % e, style='danger').show()
+            Notification("Couldn't delete: %s" % e, style='danger', timeout=4).show()
             return
         self._refresh()

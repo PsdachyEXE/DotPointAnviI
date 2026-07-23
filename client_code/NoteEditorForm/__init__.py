@@ -73,11 +73,11 @@ class NoteEditorForm(ColumnPanel):
         try:
             notes = anvil.server.call('search_notes')
         except Exception as e:
-            Notification("Couldn't load note: %s" % e, style='danger').show()
+            Notification("Couldn't load note: %s" % e, style='danger', timeout=4).show()
             return
         note = next((n for n in notes if n['id'] == self._note_id), None)
         if note is None:
-            Notification("Note not found.", style='danger').show()
+            Notification("Note not found.", style='danger', timeout=4).show()
             return
         self._title_tb.text = note.get('title') or ''
         self._content_ta.text = note.get('content') or ''
@@ -120,9 +120,9 @@ class NoteEditorForm(ColumnPanel):
             else:
                 result_id = anvil.server.call('create_note', record)
         except Exception as e:
-            Notification(str(e), style='danger').show()
+            Notification(str(e), style='danger', timeout=4).show()
             return
-        Notification("Note saved.", style='success').show()
+        Notification("Note saved.", style='success', timeout=4).show()
         self.raise_event('x-close-alert', value=result_id)
 
     def _on_cancel_click(self, **event_args):

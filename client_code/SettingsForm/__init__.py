@@ -129,7 +129,7 @@ class SettingsForm(ColumnPanel):
         try:
             s = anvil.server.call('get_settings')
         except Exception as e:
-            Notification("Couldn't load settings: %s" % e, style='danger').show()
+            Notification("Couldn't load settings: %s" % e, style='danger', timeout=4).show()
             return
 
         reminder_days = s.get('default_reminder_days') or []
@@ -165,7 +165,7 @@ class SettingsForm(ColumnPanel):
             end_dp.date = e
         self._school_year_tb.text = '2026'
         Notification("VIC 2026 term dates loaded — click Save to apply.",
-                     style='info').show()
+                     style='info', timeout=4).show()
 
     def _on_save_click(self, **event_args):
         fields = {
@@ -191,7 +191,7 @@ class SettingsForm(ColumnPanel):
             try:
                 fields['school_year'] = int(year_text)
             except ValueError:
-                Notification("School year must be a whole number.", style='danger').show()
+                Notification("School year must be a whole number.", style='danger', timeout=4).show()
                 return
         else:
             fields['school_year'] = None
@@ -202,6 +202,6 @@ class SettingsForm(ColumnPanel):
 
         try:
             anvil.server.call('update_settings', fields)
-            Notification("Settings saved.", style='success').show()
+            Notification("Settings saved.", style='success', timeout=4).show()
         except Exception as e:
-            Notification("Couldn't save settings: %s" % e, style='danger').show()
+            Notification("Couldn't save settings: %s" % e, style='danger', timeout=4).show()

@@ -4,7 +4,18 @@ Assessment tracker for VCE students. Port of the Vite/React/TypeScript app at `C
 
 ## Status
 
-Foundations stage. Module files are stubbed; no business logic is implemented yet. See `docs/IMPLEMENTATION_SPEC.md` for the authoritative spec and the per-section implementation plan.
+**Feature-complete and live-tested.** All spec §10 slices are implemented:
+auth + settings (incl. one-click VIC 2026 term preset), assessments CRUD,
+the regex/lookup NLP parser (parse → confidence-badged preview → save),
+bulk import (atomic), the three-panel dashboard (list + calendar + upcoming,
+filters/sort, clickable urgent days, inline card status changes), notes
+(CRUD/search/tags/pinning) with assessment linking, the 30-minute email
+reminder dispatcher (scheduled task registered), and JSON export/import.
+A light theme ships via `native_deps.head_html` styling semantic role classes.
+
+Parser accuracy measured at **30/30 subjects and 30/30 due dates** against the
+EC-EF-01/02 test set (target ≥80%). See `docs/TESTING.md` for the full
+testing evidence and the defect → fix → re-test trail.
 
 ## Repository layout
 
@@ -34,6 +45,7 @@ DotPointAnviI/
   docs/
     IMPLEMENTATION_SPEC.md   # Authoritative spec for the port
     MANUAL_SETUP.md          # Anvil IDE steps that can't be automated from files
+    TESTING.md               # Testing evidence: suites, EC accuracy, live journeys
     INVENTORY.md             # Source-app inventory
     INVENTORY_annotated.md   # Inventory with implementation intent
     REQUIREMENTS_COVERAGE.md # Requirements traceability matrix

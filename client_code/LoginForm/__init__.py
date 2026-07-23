@@ -85,12 +85,12 @@ class LoginForm(ColumnPanel):
             return  # cancelled
         email, password = creds
         if not email or not password:
-            Notification("Email and password are required.", style='danger').show()
+            Notification("Email and password are required.", style='danger', timeout=4).show()
             return
         try:
             anvil.server.call(server_fn, email, password)
         except Exception as e:
-            Notification(str(e), style='danger').show()
+            Notification(str(e), style='danger', timeout=4).show()
             return
         anvil.set_url_hash('dashboard')
         open_form('Main')

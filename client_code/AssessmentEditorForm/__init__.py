@@ -218,7 +218,7 @@ class AssessmentEditorForm(ColumnPanel):
             try:
                 a = anvil.server.call('get_assessment', self._assessment_id)
             except Exception as e:
-                Notification("Couldn't load assessment: %s" % e, style='danger').show()
+                Notification("Couldn't load assessment: %s" % e, style='danger', timeout=4).show()
                 return
             self._title_tb.text = a.get('title') or ''
             self._subject_dd.selected_value = a.get('subject')
@@ -271,7 +271,7 @@ class AssessmentEditorForm(ColumnPanel):
         try:
             payload = self._build_payload()
         except (ValueError, TypeError):
-            Notification("Weight must be a number.", style='danger').show()
+            Notification("Weight must be a number.", style='danger', timeout=4).show()
             return
         try:
             if self._mode == 'edit':
@@ -280,9 +280,9 @@ class AssessmentEditorForm(ColumnPanel):
             else:
                 result_id = anvil.server.call('create_assessment', payload)
         except Exception as e:
-            Notification(str(e), style='danger').show()
+            Notification(str(e), style='danger', timeout=4).show()
             return
-        Notification("Assessment saved.", style='success').show()
+        Notification("Assessment saved.", style='success', timeout=4).show()
         self.raise_event('x-close-alert', value=result_id)
 
     def _on_cancel_click(self, **event_args):
@@ -294,7 +294,7 @@ class AssessmentEditorForm(ColumnPanel):
         try:
             notes = anvil.server.call('search_notes', query=query or None)
         except Exception as e:
-            Notification("Couldn't search notes: %s" % e, style='danger').show()
+            Notification("Couldn't search notes: %s" % e, style='danger', timeout=4).show()
             return
         self._note_results.clear()
         if not notes:
@@ -375,12 +375,12 @@ class AssessmentEditorForm(ColumnPanel):
     def _on_bulk_parse_click(self, **event_args):
         text = (self._bulk_ta.text or '').strip()
         if not text:
-            Notification("Paste some lines first.", style='warning').show()
+            Notification("Paste some lines first.", style='warning', timeout=4).show()
             return
         try:
             results = anvil.server.call('parse_bulk', text)
         except Exception as e:
-            Notification("Couldn't parse: %s" % e, style='danger').show()
+            Notification("Couldn't parse: %s" % e, style='danger', timeout=4).show()
             return
         self._render_multi(results)
 
@@ -430,19 +430,19 @@ class AssessmentEditorForm(ColumnPanel):
                 'term_info': f.get('term_info'),
             })
         if not records:
-            Notification("Nothing ticked to create.", style='warning').show()
+            Notification("Nothing ticked to create.", style='warning', timeout=4).show()
             return
         try:
             result = anvil.server.call('create_bulk_assessments', records)
         except Exception as e:
-            Notification(str(e), style='danger').show()
+            Notification(str(e), style='danger', timeout=4).show()
             return
         if result.get('rejected'):
             msgs = ', '.join('line %d: %s' % (r['index'] + 1, r['reason'])
                              for r in result['rejected'])
             Notification("Some lines were invalid — nothing was saved. %s" % msgs,
-                         style='danger').show()
+                         style='danger', timeout=4).show()
             return
         Notification("Created %d assessment(s)." % result.get('inserted', 0),
-                     style='success').show()
+                     style='success', timeout=4).show()
         self.raise_event('x-close-alert', value=result.get('inserted', 0))

@@ -7,10 +7,10 @@ Three panels populated by a single get_dashboard_data() round-trip (NFR01):
   - assessment list (filtered/sorted) with urgency colour + days-remaining,
   - month calendar grid with per-day urgency colour + a month navigator,
   - "upcoming" 30-day sidebar.
-Plus the NLP input bar (parse -> preview -> save) and a filter row
-(subject / status / type / show-completed).
-
-Bulk add (spec step 5) and the linked-notes UI (step 7) are still deferred.
+Plus the NLP input bar (parse -> preview -> save), Bulk add, a filter row
+(subject / status / type / show-completed), a sort control (FR07), a
+school-terms hint banner (FR15 discoverability), inline card status changes
+(EC-UX-05), and clickable calendar days that pop up that day's assessments.
 
 See IMPLEMENTATION_SPEC.md section 3 (DashboardForm).
 """
@@ -235,7 +235,7 @@ class DashboardForm(ColumnPanel):
         try:
             anvil.server.call('update_assessment', assessment_id, {'status': new_status})
         except Exception as e:
-            Notification("Couldn't update status: %s" % e, style='danger').show()
+            Notification("Couldn't update status: %s" % e, style='danger', timeout=4).show()
         self._refresh()
 
     def _due_text(self, a):
@@ -354,12 +354,12 @@ class DashboardForm(ColumnPanel):
     def _on_parse_click(self, **event_args):
         text = (self._nlp_tb.text or '').strip()
         if not text:
-            Notification("Type an assessment first.", style='warning').show()
+            Notification("Type an assessment first.", style='warning', timeout=4).show()
             return
         try:
             parsed = anvil.server.call('parse_text', text)
         except Exception as e:
-            Notification("Couldn't parse: %s" % e, style='danger').show()
+            Notification("Couldn't parse: %s" % e, style='danger', timeout=4).show()
             return
         from ..AssessmentEditorForm import AssessmentEditorForm
         result = alert(AssessmentEditorForm(mode='preview', prefill=parsed),
@@ -393,6 +393,6 @@ class DashboardForm(ColumnPanel):
         try:
             anvil.server.call('delete_assessment', assessment_id)
         except Exception as e:
-            Notification("Couldn't delete: %s" % e, style='danger').show()
+            Notification("Couldn't delete: %s" % e, style='danger', timeout=4).show()
             return
         self._refresh()
