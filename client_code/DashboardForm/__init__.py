@@ -182,10 +182,10 @@ class DashboardForm(ColumnPanel):
         if days is None:
             return due
         if days < 0:
-            return '%s (%d days overdue)' % (due, -days)
+            return '%s (%d day%s overdue)' % (due, -days, 's' if days != -1 else '')
         if days == 0:
             return '%s (today)' % due
-        return '%s (in %d days)' % (due, days)
+        return '%s (in %d day%s)' % (due, days, 's' if days != 1 else '')
 
     # --- calendar panel ----------------------------------------------------
     def _render_calendar(self, cal):
@@ -223,8 +223,11 @@ class DashboardForm(ColumnPanel):
                 else:
                     band = _cell(colours, day)
                     if band:
-                        cell = Label(text=str(day), bold=True, foreground='#ffffff',
-                                     background=_URGENCY_COLOURS.get(band, '#9aa0a6'))
+                        # Coloured bold day number: white-on-background proved
+                        # unreliable in the runtime theme (cell rendered
+                        # invisible), so carry the urgency in the text colour.
+                        cell = Label(text='● %d' % day, bold=True,
+                                     foreground=_URGENCY_COLOURS.get(band, '#9aa0a6'))
                     else:
                         cell = Label(text=str(day), foreground='#9aa0a6')
                 row.add_component(cell, row='w%d' % w, col_xs=col, width_xs=12 // 7 or 1)
