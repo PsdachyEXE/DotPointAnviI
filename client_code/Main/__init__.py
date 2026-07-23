@@ -82,8 +82,12 @@ class Main(ColumnPanel):
             # Already authenticated; don't show the login screen.
             anvil.set_url_hash('dashboard')
             target = 'DashboardForm'
-        if target == 'OnboardingForm' and settings is not None and settings.get('subjects'):
-            # Already onboarded; subjects change only via the Settings flow.
+        if target == 'OnboardingForm' and (settings is None or settings.get('subjects')):
+            # Already onboarded — or settings unknown after a fetch failure.
+            # Fail CLOSED to the dashboard: rendering OnboardingForm blind
+            # would offer an empty picker that could overwrite locked
+            # subjects. The gate re-fires on the next navigation once the
+            # settings fetch succeeds.
             anvil.set_url_hash('dashboard')
             target = 'DashboardForm'
         self._render(target)

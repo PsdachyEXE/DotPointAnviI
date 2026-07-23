@@ -31,7 +31,9 @@ import datetime
 
 from ._auth import _require_user
 from ._datetime import _user_today
-from ._constants import SUBJECT_ALIASES, TYPE_KEYWORDS, MATHS_GROUP
+from ._constants import (
+    SUBJECT_ALIASES, TYPE_KEYWORDS, MATHS_GROUP, AMBIGUOUS_BARE_ALIASES,
+)
 from .notes import _get_or_create_settings, _row_value
 
 # dateparser is an optional third-party fallback (spec section 7) for free-form
@@ -70,61 +72,60 @@ _TITLE_FILLER = {
 }
 
 
-# --- tokenisation ----------------------------------------------------------
-
-def _tokenise(s: str) -> list:
-    """Split on whitespace, preserving "quoted substrings" as single tokens."""
-    tokens = []
-    for chunk in re.findall(r'"[^"]*"|\S+', s):
-        if chunk.startswith('"') and chunk.endswith('"') and len(chunk) >= 2:
-            tokens.append(chunk[1:-1])
-        else:
-            tokens.append(chunk)
-    return tokens
-
-
 # --- field matchers --------------------------------------------------------
 
-def _match_subject_in(aliases: dict, text: str, tokens: list):
-    """Match one alias table against the input; the shared matching core.
-
-    Multi-word aliases ('math methods', 'phys ed') are tried first, longest
-    first, so 'methods' does not pre-empt 'math methods'. Then single tokens.
-    """
-    low = text.lower()
-    multi = sorted(
-        (a for a in aliases if ' ' in a), key=len, reverse=True
-    )
-    for alias in multi:
-        if re.search(r'\b' + re.escape(alias) + r'\b', low):
-            return aliases[alias], alias
-    for tok in tokens:
-        key = tok.lower().strip('.,;:!?')
-        if key in aliases:
-            return aliases[key], key
-    return None, None
-
-
-def _match_subject(text: str, tokens: list, user_subjects=None):
+def _match_subject(text: str, user_subjects=None):
     """Return (canonical_subject, matched_alias) or (None, None).
 
-    When the student has locked-in subjects (spec §11), aliases for THOSE
-    subjects are tried first, so e.g. 'lit' can't be shadowed by an alias of a
-    subject they don't take; the full alias table remains as fallback. Bonus
-    remap: a student with exactly one locked maths study gets bare
-    'math'/'maths' pointed at it instead of the generic 'Mathematics'.
+    Collects EVERY alias hit with its span, then picks one winner:
+
+    1. A hit whose span sits inside a longer hit loses to it, so 'maths'
+       never pre-empts 'maths methods' or 'specialist maths' — even when the
+       shorter alias belongs to a locked subject.
+    2. Unambiguous aliases beat AMBIGUOUS_BARE_ALIASES (ordinary sentence
+       words): 'Health survey for PE' parses as Physical Education, while a
+       lone 'health essay' still parses as HHD.
+    3. A locked subject (spec §11) beats a non-locked one, so a student's own
+       studies win alias collisions; the full table still matches as
+       fallback when none of their subjects is mentioned.
+    4. Earliest mention wins, longer alias breaking position ties.
+
+    Bonus remap: with exactly one locked maths study, a surviving bare
+    'math'/'maths'/'mathematics' hit means THAT study, not the generic
+    'Mathematics' catch-all.
     """
-    if user_subjects:
-        chosen = set(user_subjects)
-        priority = {a: c for a, c in SUBJECT_ALIASES.items() if c in chosen}
-        maths = [s for s in user_subjects if s in MATHS_GROUP]
-        if len(maths) == 1:
-            for alias in ('math', 'maths', 'mathematics'):
-                priority[alias] = maths[0]
-        subject, alias = _match_subject_in(priority, text, tokens)
-        if subject is not None:
-            return subject, alias
-    return _match_subject_in(SUBJECT_ALIASES, text, tokens)
+    low = text.lower()
+    matches = []   # (start, end, alias, canonical)
+    for alias, canonical in SUBJECT_ALIASES.items():
+        m = re.search(r'\b' + re.escape(alias) + r'\b', low)
+        if m:
+            matches.append((m.start(), m.end(), alias, canonical))
+    if not matches:
+        return None, None
+
+    maths = [s for s in (user_subjects or []) if s in MATHS_GROUP]
+    if len(maths) == 1:
+        matches = [(s, e, a, maths[0] if c == 'Mathematics' else c)
+                   for s, e, a, c in matches]
+
+    def _contained(m):
+        return any(o is not m
+                   and o[0] <= m[0] and m[1] <= o[1]
+                   and (o[1] - o[0]) > (m[1] - m[0])
+                   for o in matches)
+    survivors = [m for m in matches if not _contained(m)]
+
+    locked = set(user_subjects or [])
+
+    def _rank(m):
+        start, end, alias, canonical = m
+        return (alias in AMBIGUOUS_BARE_ALIASES,
+                canonical not in locked if locked else False,
+                start,
+                -(end - start))
+    survivors.sort(key=_rank)
+    _, _, alias, canonical = survivors[0]
+    return canonical, alias
 
 
 def _match_type(text: str):
@@ -363,10 +364,9 @@ def _score(detected: set) -> str:
 def _parse_one(line: str, today: datetime.date, settings_row) -> dict:
     """Parse a single line into the parse_text result dict. Never raises."""
     line = (line or '').strip()
-    tokens = _tokenise(line)
 
     user_subjects = _row_value(settings_row, 'subjects') if settings_row is not None else None
-    subject, subject_src = _match_subject(line, tokens, user_subjects)
+    subject, subject_src = _match_subject(line, user_subjects)
     type_value, type_src = _match_type(line)
     weight, weight_src = _extract_weight(line)
     due_date, date_why, term_info, date_src = _extract_date(line, today, settings_row)

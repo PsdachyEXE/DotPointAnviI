@@ -32,9 +32,12 @@ from ._constants import (
 )
 from ._datetime import _get_tz
 
-# Defaults for a freshly created user_settings row (spec §1). subjects=None
-# means "not onboarded yet": the Main router gates such users into
-# OnboardingForm until set_subjects has run once.
+# Defaults for a freshly created user_settings row (spec §1). 'subjects' is
+# deliberately ABSENT: naming the column in add_row would raise
+# NoSuchColumnError on a database whose 'subjects' migration hasn't been
+# applied yet (auto_create_missing_columns is off), which would break signup
+# itself. An unset column reads back as None, which _row_value already treats
+# as "not onboarded" — so the OnboardingForm gate works either way.
 _SETTINGS_DEFAULTS = {
     'theme': 'light',
     'default_reminder_days': [7, 2],
@@ -42,7 +45,6 @@ _SETTINGS_DEFAULTS = {
     'school_year': None,
     'school_terms': [],
     'timezone': 'Australia/Melbourne',  # Pending Decision 2 (A)
-    'subjects': None,
 }
 
 # Whitelist of client-updatable settings keys (spec §2 update_settings).
@@ -152,9 +154,15 @@ def _clean_subjects(subjects) -> list:
             "Methods or Specialist).")
 
     if not any(s in ENGLISH_GROUP for s in clean):
+        # Reserve a slot for the auto-added English BEFORE appending, so the
+        # error names what actually happened rather than blaming the user for
+        # a 13th subject they never picked.
+        if len(clean) >= 12:
+            raise ValueError(
+                "English is added automatically (every VCE program includes "
+                "an English study) — pick at most 11 other subjects.")
         clean.append('English')
 
-    # Cap AFTER the English auto-add so the stored list can never exceed 12.
     if len(clean) > 12:
         raise ValueError("that's more than 12 subjects — pick your actual program")
 
@@ -168,7 +176,14 @@ def set_subjects(subjects: list) -> dict:
     user = _require_user()
     row = _get_or_create_settings(user)
     clean = _clean_subjects(subjects)
-    row.update(subjects=clean)
+    try:
+        row.update(subjects=clean)
+    except Exception:
+        # The only expected failure here is the 'subjects' column not existing
+        # yet (Data Tables migration not applied after deploy).
+        raise ValueError(
+            "The database schema hasn't been migrated yet — apply the "
+            "'subjects' column migration in the Anvil Data Tables view.")
     return _settings_row_to_dict(row)
 
 

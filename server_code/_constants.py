@@ -88,9 +88,11 @@ LEGACY_SUBJECT_RENAMES = {
 }
 
 # SUBJECT_ALIASES maps every lowercased alias the parser might see onto a
-# canonical subject (FR16). Multi-word aliases (e.g. 'math methods', 'phys ed')
-# are matched as phrases before single tokens by nlp._match_subject. Every
-# CANONICAL_SUBJECTS entry has at least its own lowercased name here, so
+# canonical subject (FR16); nlp._match_subject collects every alias hit with
+# its position and picks the winner (longer phrases beat contained tokens,
+# unambiguous aliases beat AMBIGUOUS_BARE_ALIASES, locked subjects beat
+# non-locked, then earliest mention). Every CANONICAL_SUBJECTS entry appears
+# in SUBJECT_ALIASES.values() (via its own name or a standard shorthand), so
 # assessments._validate_assessment_payload (subject in SUBJECT_ALIASES.values())
 # accepts the whole picker catalog. 'Further Mathematics' was renamed to
 # 'General Mathematics' by VCAA in 2023; the 'further*' aliases are kept for
@@ -115,6 +117,7 @@ SUBJECT_ALIASES = {
     'further': 'General Mathematics',
     'further maths': 'General Mathematics',
     'further mathematics': 'General Mathematics',
+    'general': 'General Mathematics',
     'general maths': 'General Mathematics',
     'general mathematics': 'General Mathematics',
     'gen maths': 'General Mathematics',
@@ -233,6 +236,20 @@ SUBJECT_ALIASES = {
     # Other
     'extended investigation': 'Extended Investigation',
 }
+
+# Bare aliases that are also ordinary sentence words ("health survey for PE",
+# "business case study for Economics"). They still parse when they're the only
+# subject mentioned, but whenever an unambiguous alias appears anywhere in the
+# line it wins regardless of position (see nlp._match_subject ranking).
+AMBIGUOUS_BARE_ALIASES = frozenset((
+    'health', 'business', 'media', 'music', 'art', 'food', 'politics',
+    'legal', 'religion', 'eco', 'dance', 'drama', 'computing', 'general',
+    'theatre',
+    # Languages read as adjectives at least as often as subjects
+    # ("french revolution", "greek mythology").
+    'chinese', 'french', 'german', 'greek', 'indonesian', 'indo', 'italian',
+    'japanese', 'spanish', 'vietnamese', 'viet',
+))
 
 # --- Assessment type keywords ----------------------------------------------
 # Maps canonical type -> lowercased trigger keywords. 'other' is the fallback:

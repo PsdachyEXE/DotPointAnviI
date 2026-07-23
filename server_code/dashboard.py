@@ -18,7 +18,7 @@ import datetime
 import calendar as _calendar
 
 from ._auth import _require_user
-from ._datetime import _user_today, _urgency_band
+from ._datetime import _user_today, _user_now, _urgency_band
 from .notes import _get_or_create_settings, _settings_row_to_dict
 from .assessments import _list_assessments_impl, _row_to_dict, _decorate
 from .exams import _exam_subjects, _exams_for_subjects, _next_exam, _exam_days_for_month
@@ -111,7 +111,7 @@ def get_dashboard_data(month: str = None, filters: dict = None, sort: dict = Non
 
     # Exam overlay (spec §13): flag this month's exam days on the calendar and
     # surface the next-exam countdown chip.
-    user_exams = _exams_for_subjects(locked, today)
+    user_exams = _exams_for_subjects(locked, today, _user_now(settings))
     calendar_payload['exam_days'] = _exam_days_for_month(user_exams, year, mon)
 
     return {

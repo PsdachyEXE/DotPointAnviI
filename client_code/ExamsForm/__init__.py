@@ -110,8 +110,15 @@ class ExamsForm(ColumnPanel):
         no_exam = data.get('no_exam_subjects') or []
         if no_exam:
             body.add_component(Label(
-                text='No VCAA written exam on file: %s' % ', '.join(no_exam),
+                text='No written exam on the VCAA timetable: %s' % ', '.join(no_exam),
                 font_size=12, italic=True, foreground='#9aa0a6'))
+
+        not_covered = data.get('not_covered') or []
+        if not_covered:
+            body.add_component(Label(
+                text='Not in DotPoint\'s timetable data yet (check the VCAA '
+                     'timetable): %s' % ', '.join(not_covered),
+                font_size=12, italic=True, foreground='#e8833a'))
 
         src = Link(text='Source: VCAA 2026 VCE examination timetable',
                    url=data.get('source_url'), font_size=12)

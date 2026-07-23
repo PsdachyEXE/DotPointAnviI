@@ -294,15 +294,14 @@ Pure parser logic. No table writes from this module — `parse_text` returns a d
   1. Call `user = _require_user()`.
   2. Fetch the user's `user_settings` row (used only for timezone in date resolution).
   3. Compute `today = _user_today(settings)`.
-  4. Tokenise `s` (split on whitespace, preserve quoted substrings as single tokens).
-  5. Call `_match_subject(tokens) -> str | None` — dictionary lookup against `SUBJECT_ALIASES` (case-folded).
-  6. Call `_match_type(s) -> str | None` — regex against `TYPE_KEYWORDS`; default `'other'` if no fire.
-  7. Call `_extract_date(s, today, settings) -> tuple[date | None, str | None]` — ordered regex chain: DD/MM, weekday names, `"Term X Week Y"` (uses `settings['school_terms']`; returns `(None, None)` and downgrades confidence if `school_terms` is empty), `"tomorrow"`, `"today"`, `"in N days"`, month-name dates. The second element is the original term-phrase string for the `term_info` audit field.
-  8. Call `_extract_weight(s) -> float | None` — regex `\d+(?:\.\d+)?\s*(%|percent)`.
-  9. Call `_extract_title(s, matched_spans) -> str` — the residual after removing matched spans; trimmed.
-  10. Assemble a dict with keys `title, subject, type, due_date, weight, term_info` plus per-field provenance: `{'fields': {...}, 'why': {'due_date': 'matched "next Friday" → 2026-03-20', ...}}`.
-  11. Call `_score(parsed_dict) -> str` — counts detected fields among `{subject, type, due_date, weight}`; ≥4 → `'HIGH'`, 2–3 → `'MEDIUM'`, <2 → `'LOW'`.
-  12. Return `{'fields': {...}, 'why': {...}, 'confidence': 'HIGH'|'MEDIUM'|'LOW', 'source_text': s}`.
+  4. Call `_match_subject(s, user_subjects) -> (str | None, str | None)` — collects every `SUBJECT_ALIASES` hit (case-folded, word-boundary regex) with its position, then ranks: contained shorter hits lose to longer phrases, unambiguous aliases beat `AMBIGUOUS_BARE_ALIASES`, the student's locked subjects (§11) beat non-locked, earliest mention wins. With exactly one locked maths study, a surviving bare `maths` hit maps to that study.
+  5. Call `_match_type(s) -> str | None` — regex against `TYPE_KEYWORDS`; default `'other'` if no fire.
+  6. Call `_extract_date(s, today, settings) -> tuple[date | None, str | None]` — ordered regex chain: DD/MM, weekday names, `"Term X Week Y"` (uses `settings['school_terms']`; returns `(None, None)` and downgrades confidence if `school_terms` is empty), `"tomorrow"`, `"today"`, `"in N days"`, month-name dates. The second element is the original term-phrase string for the `term_info` audit field.
+  7. Call `_extract_weight(s) -> float | None` — regex `\d+(?:\.\d+)?\s*(%|percent)`.
+  8. Call `_extract_title(s, matched_spans) -> str` — the residual after removing matched spans; trimmed.
+  9. Assemble a dict with keys `title, subject, type, due_date, weight, term_info` plus per-field provenance: `{'fields': {...}, 'why': {'due_date': 'matched "next Friday" → 2026-03-20', ...}}`.
+  10. Call `_score(parsed_dict) -> str` — counts detected fields among `{subject, type, due_date, weight}`; ≥4 → `'HIGH'`, 2–3 → `'MEDIUM'`, <2 → `'LOW'`.
+  11. Return `{'fields': {...}, 'why': {...}, 'confidence': 'HIGH'|'MEDIUM'|'LOW', 'source_text': s}`.
 - Errors: `anvil.users.AuthenticationFailed` if not logged in. Otherwise tolerates any input; returns `'LOW'` rather than raising on parse failure.
 - External calls: none. Uses `dateparser` package as a fallback inside `_extract_date` for free-form English dates that the regex chain misses.
 - Permissions: any logged-in user.
@@ -318,8 +317,7 @@ Pure parser logic. No table writes from this module — `parse_text` returns a d
 - Permissions: any logged-in user.
 
 #### Private helpers (not callables)
-- `_tokenise(s) -> list[str]`
-- `_match_subject(tokens) -> str | None`
+- `_match_subject(s, user_subjects) -> tuple[str | None, str | None]`
 - `_match_type(s) -> str | None`
 - `_extract_date(s, today, settings) -> tuple[date | None, str | None]`
 - `_extract_weight(s) -> float | None`
@@ -1132,10 +1130,12 @@ round-trip per browser session; the router reads it on every navigation for
 the gate + theme. All settings writers push the server response back via
 `set_session_settings`; sign-out and login clear it.
 
-**Parser:** `nlp._match_subject(text, tokens, user_subjects)` tries aliases of
-locked subjects first (full table as fallback), and remaps bare
-`math/maths/mathematics` onto the student's single locked maths study when
-unambiguous.
+**Parser:** `nlp._match_subject(text, user_subjects)` collects every alias hit
+with its position and ranks them: longer phrases beat contained tokens,
+unambiguous aliases beat `AMBIGUOUS_BARE_ALIASES` (ordinary words like
+'health'/'business'), locked subjects beat non-locked, earliest mention wins.
+Bare `math/maths/mathematics` maps onto the student's single locked maths
+study when unambiguous.
 
 ## 12. Settings: Change Subjects + Theme (post-MVP slice, 2026-07)
 
@@ -1154,8 +1154,13 @@ unambiguous.
 - **Data:** `exams.EXAM_TIMETABLE_2026` — written-exam sessions (date, start,
   end, paper) keyed by canonical subject, transcribed from the official VCAA
   "2026 VCE examination timetable" (URL cited in the module; retrieved
-  2026-07-23; independently re-verified). Subjects with no VCAA written exam
-  simply have no entry.
+  2026-07-23/24; every entry independently re-verified against the same
+  page). Covers the whole catalog except `NO_WRITTEN_EXAM` (Applied
+  Computing, Extended Investigation, Art Creative Practice — no written exam
+  on the VCAA timetable, reported as `no_exam_subjects`); any future
+  uncovered subject is reported as `not_covered`, so a data gap is never
+  presented as "no exam". Music (one picker subject over four VCAA studies)
+  carries stream labels on each paper.
 - **Server:** `exams.get_exam_timetable()` → the student's papers (locked
   subjects; English guaranteed via `_exam_subjects` even for legacy rows),
   each decorated with `days_remaining` + the shared urgency band (`done` once

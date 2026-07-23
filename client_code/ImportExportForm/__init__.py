@@ -18,7 +18,7 @@ from anvil import (
     ColumnPanel, Label, Button, FileLoader, Notification, Spacer, confirm,
 )
 
-from ..common import make_top_bar
+from ..common import make_top_bar, get_session_settings, apply_theme
 
 
 class ImportExportForm(ColumnPanel):
@@ -86,3 +86,11 @@ class ImportExportForm(ColumnPanel):
         self._status.text = msg
         Notification(msg, style='success', timeout=4).show()
         self._loader.clear()
+        # The import may have changed settings server-side (theme, terms,
+        # reminder defaults) — refresh the session cache so the router and
+        # editor don't keep serving the pre-import copy.
+        try:
+            settings = get_session_settings(refresh=True)
+            apply_theme(settings.get('theme'))
+        except Exception:
+            pass

@@ -160,6 +160,9 @@ class SettingsForm(ColumnPanel):
         except Exception as e:
             Notification("Couldn't load settings: %s" % e, style='danger', timeout=4).show()
             return
+        # Heal the per-session cache with this fresh copy (e.g. after an
+        # import changed settings server-side).
+        set_session_settings(s)
 
         reminder_days = s.get('default_reminder_days') or []
         for d, cb in self._day_checks.items():
@@ -216,28 +219,33 @@ class SettingsForm(ColumnPanel):
                          style='danger', timeout=4).show()
             return
 
-        picker = SubjectPicker(catalog, selected=self._subjects)
-        if not alert(picker, title='Change subjects', large=True,
-                     buttons=[('Save subjects', True), ('Cancel', False)]):
-            return
-
-        selection = picker.get_selection()
-        if not any(s in MATHS_GROUP for s in selection):
-            Notification("Select at least one mathematics study.",
-                         style='danger', timeout=6).show()
-            return
-        if not any(s in ENGLISH_GROUP for s in selection):
-            if not confirm(
-                    "No English-group study selected — 'English' will be "
-                    "added automatically (every VCE program includes one). "
-                    "Continue?"):
+        # Re-open the picker with the user's own ticks after any failed
+        # attempt — a validation error must never throw their selection away.
+        selected = self._subjects
+        while True:
+            picker = SubjectPicker(catalog, selected=selected)
+            if not alert(picker, title='Change subjects', large=True,
+                         buttons=[('Save subjects', True), ('Cancel', False)]):
                 return
+            selected = picker.get_selection()
 
-        try:
-            settings = anvil.server.call('set_subjects', selection)
-        except Exception as e:
-            Notification(str(e), style='danger', timeout=6).show()
-            return
+            if not any(s in MATHS_GROUP for s in selected):
+                Notification("Select at least one mathematics study.",
+                             style='danger', timeout=6).show()
+                continue
+            if not any(s in ENGLISH_GROUP for s in selected):
+                if not confirm(
+                        "No English-group study selected — 'English' will be "
+                        "added automatically (every VCE program includes "
+                        "one). Continue?"):
+                    continue
+
+            try:
+                settings = anvil.server.call('set_subjects', selected)
+            except Exception as e:
+                Notification(str(e), style='danger', timeout=6).show()
+                continue
+            break
 
         set_session_settings(settings)
         self._subjects = settings.get('subjects') or []

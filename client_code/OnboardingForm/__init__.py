@@ -56,9 +56,18 @@ class OnboardingForm(ColumnPanel):
         try:
             catalog = anvil.server.call('get_subject_catalog')
         except Exception as e:
+            # The router re-renders this form for every hash while the user is
+            # un-onboarded, so a dead-end here would trap them: always offer a
+            # retry and a way out.
             card.add_component(Label(
                 text="Couldn't load the subject list: %s" % e,
                 foreground='#d64550'))
+            retry = Button(text='Try again', role='primary')
+            retry.set_event_handler('click', lambda **ev: open_form('Main'))
+            card.add_component(retry)
+            sign_out = Link(text='Sign out', foreground='#6b7280')
+            sign_out.set_event_handler('click', lambda **ev: _sign_out())
+            card.add_component(sign_out)
             self.add_component(card)
             return
 
