@@ -99,7 +99,7 @@ Performed in the published app as `claude.tester@dotpoint.dev` after the
 | 9 | Live run | White-on-background calendar cell rendered invisible in the runtime theme | Urgency carried in coloured bold "● N" text | live |
 | 10 | Live run | "in 1 days" pluralization on cards | day/days switch | live |
 | 11 | Live run | Success toasts never auto-dismissed; the stack covered the action bar and swallowed clicks | `timeout=4` on all 31 notifications | live |
-| 12 | Live sweep (task logs) | Reminder emails never sent: every `run_reminder_check` pass died on `ServiceNotAdded` — the Anvil **Email service** was never added to the app, so the 30-min task COMPLETED while `anvil.email.send` raised before any send/log; `reminder_logs` stayed empty and no inbox ever received mail | Email service added to `anvil.yaml` services | task logs after next scheduled run |
+| 12 | Live sweep (task logs) | Reminder emails never sent: every `run_reminder_check` pass died on `ServiceNotAdded` — the Anvil **Email service** was never added to the app, so the 30-min task COMPLETED while `anvil.email.send` raised before any send/log; `reminder_logs` stayed empty and no inbox ever received mail | Email service added to `anvil.yaml` services | next scheduled run: error gone, **8 reminder_logs rows written** (7_day + 2_day for the test user's due-soon assessments) — send path proven |
 | 13 | Live sweep | Some success toasts still fail to auto-dismiss despite `timeout=4` and can stack over the top bar (each has a manual ×; error-style toasts dismiss fine) | OPEN — needs Anvil Notification-stacking investigation | — |
 
 Config/platform issues resolved en route: Users service missing
