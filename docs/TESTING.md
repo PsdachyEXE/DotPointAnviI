@@ -59,6 +59,31 @@ Performed in the running app with a dedicated test account
 9. Filters (subject auto-populated), sort by weight/due date, day-click popup,
    Import/Export page render, sign-out/sign-in cycle.
 
+## 3b. Live journeys — subjects / theme / exams slices (spec §11–§13)
+
+Performed in the published app as `claude.tester@dotpoint.dev` after the
+`subjects` column migration:
+
+1. Sign-in → router forces `#onboarding` ("What subjects do you do?", full
+   grouped catalog, rendered in the account's stored dark theme).
+2. Rules: empty selection blocked; no-maths selection blocked with the maths
+   message; no-English selection raises the confirm dialog and locks in with
+   **English auto-added** (chips + dashboard filter show it).
+3. Parser priority: `maths sac friday` → preview `matched 'maths' →
+   Mathematical Methods` (single-locked-maths remap) → saved.
+4. Exams (#exams): countdown banner + per-paper cards sorted by date with
+   correct VCAA times; adding Literature via Settings immediately added its
+   29 Oct paper. Dashboard: next-exam chip; purple ▲ markers on 27/30 Oct;
+   day popup lists "VCE exam: English — Written examination".
+5. Settings: theme Dark→Light flips the whole palette instantly and persists
+   across a fresh session/login; Change subjects… (confirm → prefilled picker
+   → save) updates chips, filter and exams.
+6. Regression sweep: inline card status persists; sort by weight; notes
+   create/pin/tag/search; bulk add 3 lines (Term-4-Week-2 resolved, locked
+   `lit` → Literature, fallback `spesh` → Specialist Mathematics) created
+   atomically; export JSON (8 assessments / 2 notes / settings incl. locked
+   subjects) → re-import renamed all 8 duplicates.
+
 ## 4. Defects found → fixed → re-tested
 
 | # | Found by | Defect | Fix | Re-test |
@@ -74,6 +99,8 @@ Performed in the running app with a dedicated test account
 | 9 | Live run | White-on-background calendar cell rendered invisible in the runtime theme | Urgency carried in coloured bold "● N" text | live |
 | 10 | Live run | "in 1 days" pluralization on cards | day/days switch | live |
 | 11 | Live run | Success toasts never auto-dismissed; the stack covered the action bar and swallowed clicks | `timeout=4` on all 31 notifications | live |
+| 12 | Live sweep (task logs) | Reminder emails never sent: every `run_reminder_check` pass died on `ServiceNotAdded` — the Anvil **Email service** was never added to the app, so the 30-min task COMPLETED while `anvil.email.send` raised before any send/log; `reminder_logs` stayed empty and no inbox ever received mail | Email service added to `anvil.yaml` services | task logs after next scheduled run |
+| 13 | Live sweep | Some success toasts still fail to auto-dismiss despite `timeout=4` and can stack over the top bar (each has a manual ×; error-style toasts dismiss fine) | OPEN — needs Anvil Notification-stacking investigation | — |
 
 Config/platform issues resolved en route: Users service missing
 `user_table` binding; unavailable `python310-full` base-image pin; database
