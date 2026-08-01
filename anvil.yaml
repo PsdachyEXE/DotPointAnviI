@@ -328,13 +328,28 @@ native_deps:
     }
     a, .anvil-component a { color:var(--dp-accent); }
 
-    /* Anvil gives every component 'anvil-spacing-*-small' margins. Inside our own
-       rows/cards we control spacing ourselves, so neutralise them there. */
+    /* Anvil gives every component 'anvil-spacing-*-small' margins, and stacks each
+       child of a ColumnPanel in its own .anvil-panel-section. Left alone that makes
+       every card twice as tall as its content. Inside our own containers we take
+       spacing over completely: kill the default margins, then put back one
+       deliberate gap between stacked rows.
+
+       The attribute-substring selectors matter: a card built by make_list_card
+       carries the class 'anvil-role-listcard-overdue', not 'anvil-role-listcard',
+       so matching the exact class would silently miss every coloured card. */
     .anvil-role-toolbar .anvil-component,
+    .anvil-role-row .anvil-component,
+    .anvil-role-banner .anvil-component,
     .anvil-role-card .anvil-component,
-    .anvil-role-listcard .anvil-component,
-    .anvil-role-calgrid .anvil-component {
+    [class*="anvil-role-listcard"] .anvil-component,
+    .anvil-role-calgrid .anvil-component,
+    .anvil-role-calhead .anvil-component,
+    [class*="anvil-role-calcell"] .anvil-component {
       margin-top:0 !important; margin-bottom:0 !important;
+    }
+    .anvil-role-card > .anvil-panel-section + .anvil-panel-section,
+    [class*="anvil-role-listcard"] > .anvil-panel-section + .anvil-panel-section {
+      margin-top:var(--dp-s2);
     }
 
     /* The centred content column every page sits in. */
