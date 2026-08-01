@@ -353,6 +353,24 @@ native_deps:
       margin-top:var(--dp-s2);
     }
 
+    /* Every FlowPanel we use as a row sets its own `gap`. Anvil also gives the row
+       a -15px side bleed and each item a 15px side margin, which together add ~38px
+       between items and indent the first one — so a row of chips never lined up
+       with the section header above it. Cancel both and let `gap` be the only thing
+       deciding horizontal spacing. */
+    .anvil-role-row > .flow-panel-gutter,
+    .anvil-role-toolbar > .flow-panel-gutter,
+    .anvil-role-banner > .flow-panel-gutter,
+    .anvil-role-topbar > .flow-panel-gutter,
+    .anvil-role-pickgrid > .flow-panel-gutter {
+      margin-left:0 !important; margin-right:0 !important; }
+    .anvil-role-row > .flow-panel-gutter > .flow-panel-item,
+    .anvil-role-toolbar > .flow-panel-gutter > .flow-panel-item,
+    .anvil-role-banner > .flow-panel-gutter > .flow-panel-item,
+    .anvil-role-topbar > .flow-panel-gutter > .flow-panel-item,
+    .anvil-role-pickgrid > .flow-panel-gutter > .flow-panel-item {
+      margin-left:0 !important; margin-right:0 !important; }
+
     /* The centred content column every page sits in. */
     .anvil-role-page { max-width:1180px; margin:0 auto !important;
       padding:0 var(--dp-s4) var(--dp-s7) var(--dp-s4) !important; }
@@ -734,10 +752,14 @@ native_deps:
       border:1px solid var(--dp-input-border) !important;
       border-radius:var(--dp-r-sm) !important; padding:6px 16px !important; }
     .modal-footer .btn-default:hover { background:var(--dp-btn2-hover) !important; }
-    .modal-footer .btn-primary, .modal-footer .btn-default:first-child {
+    /* Anvil's confirm() renders its affirmative button as Bootstrap's green
+       btn-success, which is the one control in the app that is not on-brand. */
+    .modal-footer .btn-primary, .modal-footer .btn-success,
+    .modal-footer .btn-default:first-child {
       background:var(--dp-accent) !important; color:#fff !important;
       border:1px solid var(--dp-accent) !important; }
-    .modal-footer .btn-primary:hover, .modal-footer .btn-default:first-child:hover {
+    .modal-footer .btn-primary:hover, .modal-footer .btn-success:hover,
+    .modal-footer .btn-default:first-child:hover {
       background:var(--dp-accent-hover) !important; }
 
     /* ---------- 14. Toasts ---------- */
