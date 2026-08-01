@@ -29,7 +29,7 @@ import anvil.server
 import anvil.users
 import datetime
 from anvil import (
-    ColumnPanel, FlowPanel, Label, Link, Button, CheckBox, Spacer,
+    ColumnPanel, FlowPanel, Label, Link, Button, CheckBox,
     Notification, open_form,
 )
 
@@ -369,7 +369,13 @@ def make_field(label_text, component, hint=None):
 
 
 def make_divider():
-    return Spacer(role='divider', height=1)
+    """A hairline rule between two blocks of a card or dialog.
+
+    Built from an empty ColumnPanel rather than a Spacer: Anvil's Spacer does
+    not accept a `role`, so it cannot be styled. The stylesheet gives this one
+    a top border and the vertical margin either side of it.
+    """
+    return ColumnPanel(role='divider')
 
 
 # --- shared subject picker (spec §11) ----------------------------------------
