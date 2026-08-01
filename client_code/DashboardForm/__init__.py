@@ -25,31 +25,28 @@ See IMPLEMENTATION_SPEC.md section 3 (DashboardForm) and section 14.
 
 import anvil
 import anvil.server
-import datetime
 from anvil import (
     ColumnPanel, FlowPanel, GridPanel, Label, Link, TextBox, Button, CheckBox,
-    DropDown, Spacer, alert, confirm,
+    DropDown, alert, confirm,
 )
 
 from ..common import (
     make_top_bar, make_page, make_row, make_toolbar, make_list_card,
-    make_banner, make_section_header, make_chip,
-    make_empty_state, band_role, navigate, toast_error,
+    make_banner, make_section_header, make_chip, make_band_chip,
+    make_empty_state, band_role, navigate, toast_error, toast_warn, from_iso, CONF_TONE,
 )
 
 # Mirrors of the server enums (the client cannot import server modules; keep in
-# sync — test_constants.py asserts these still match _constants.py).
+# sync). The offline constants-integrity suite in docs/TESTING.md asserts
+# these still match server_code/_constants.py.
 _TYPES = (('SAC', 'sac'), ('SAT', 'sat'), ('Exam', 'exam'),
           ('Project', 'project'), ('Homework', 'homework'), ('Other', 'other'))
 _STATUSES = (('Not started', 'not_started'), ('In progress', 'in_progress'),
              ('Completed', 'completed'))
 _TYPE_LABELS = dict((v, k) for k, v in _TYPES)
-_SORTS =(('Sort: due date', 'due_date'), ('Sort: weight', 'weight'),
+_SORTS = (('Sort: due date', 'due_date'),
+          ('Sort: weight', 'weight'),
           ('Sort: subject', 'subject'))
-
-# Parser confidence -> chip tone. The colours themselves live in the
-# stylesheet, so these are role suffixes, not hex values.
-_CONF_TONE = {'HIGH': 'ok', 'MEDIUM': 'warn', 'LOW': 'bad'}
 
 _WEEKDAY_HEADERS = ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')
 _MONTH_NAMES = ('', 'January', 'February', 'March', 'April', 'May', 'June',
@@ -63,16 +60,6 @@ def _cell(dct, day):
     if day in dct:
         return dct[day]
     return dct.get(str(day))
-
-
-def _from_iso(s):
-    """'YYYY-MM-DD' -> date, or None (manual; avoids Skulpt isoformat quirks)."""
-    if not s or not isinstance(s, str) or len(s) < 10:
-        return None
-    try:
-        return datetime.date(int(s[0:4]), int(s[5:7]), int(s[8:10]))
-    except (ValueError, TypeError):
-        return None
 
 
 class DashboardForm(ColumnPanel):
@@ -122,12 +109,10 @@ class DashboardForm(ColumnPanel):
             self._show_completed_cb, self._sort_dd))
 
         # Banner slots: filled only when there is something to say.
-        self._hint_panel = ColumnPanel(role='row')
+        self._hint_panel = ColumnPanel()
         body.add_component(self._hint_panel)
-        self._exam_chip_panel = ColumnPanel(role='row')
+        self._exam_chip_panel = ColumnPanel()
         body.add_component(self._exam_chip_panel)
-
-        body.add_component(Spacer(height=8))
 
         # --- three-panel body (list | calendar | upcoming) ---
         # role='dashgrid' is what the stylesheet's media query targets to stack
@@ -165,12 +150,13 @@ class DashboardForm(ColumnPanel):
                                      sort={'by': self._sort_dd.selected_value or 'due_date'})
         except Exception as e:
             self._list_panel.clear()
+            toast_error("Couldn't load your dashboard: %s" % e)
             self._list_panel.add_component(make_empty_state(
                 "Couldn't load your dashboard",
-                'Check your connection and try again. (%s)' % e,
+                'Check your connection and try again.',
                 'Retry', self._refresh))
             return
-        self._today = _from_iso(data.get('today'))
+        self._today = from_iso(data.get('today'))
         self._populate_subjects(data.get('subjects', []))
         self._render_hint(data.get('settings', {}))
         self._render_exam_chip(data.get('next_exam'))
@@ -206,10 +192,10 @@ class DashboardForm(ColumnPanel):
         go = Link(text='Exam timetable', role='t-accent')
         go.set_event_handler('click', lambda **e: navigate('exams'))
         self._exam_chip_panel.add_component(make_banner(
-            make_chip('Next exam', 'exam'),
+            Label(text='Next exam', role='sectionhead'),
             Label(text='%s — %s' % (next_exam.get('subject'), next_exam.get('paper')),
                   role='cardtitle'),
-            make_chip(when, 'exam'),
+            make_band_chip(when, next_exam.get('urgency_band')),
             go))
 
     def _populate_subjects(self, subjects):
@@ -252,7 +238,7 @@ class DashboardForm(ColumnPanel):
         if conf:
             # FR17 audit trail: this row came from the parser, at this confidence.
             top.add_component(make_chip('parsed · %s' % conf,
-                                        _CONF_TONE.get(conf, 'distant')))
+                                        CONF_TONE.get(conf)))
         card.add_component(top)
 
         # Row 2: when it's due, how much it's worth, and the actions.
@@ -339,9 +325,15 @@ class DashboardForm(ColumnPanel):
         items = _cell(self._day_buckets, day) or []
         exams = _cell(self._exam_days, day) or []
 
+        # Only a day with something on it is clickable. A Link on every square
+        # would give the whole month a hover affordance that mostly leads to a
+        # dialog saying "nothing here" — the pointer should promise something.
         role = band_role(band, 'calcell') if band else 'calcell'
-        cell = Link(role=role)
-        cell.set_event_handler('click', lambda d=day, **e: self._on_day_click(d))
+        if items or exams:
+            cell = Link(role=role)
+            cell.set_event_handler('click', lambda d=day, **e: self._on_day_click(d))
+        else:
+            cell = ColumnPanel(role=role)
 
         is_today = (self._today is not None and year == self._today.year
                     and month == self._today.month and day == self._today.day)
@@ -363,7 +355,9 @@ class DashboardForm(ColumnPanel):
         exams = _cell(self._exam_days, day) or []
         panel = ColumnPanel()
         if not items and not exams:
-            panel.add_component(make_empty_state('Nothing due this day'))
+            panel.add_component(make_empty_state(
+                'Nothing due this day',
+                'No assessments or exams fall on this date.'))
         for label in exams:
             row = make_list_card()
             row.add_component(make_row(make_chip('VCE exam', 'exam'),
@@ -426,7 +420,7 @@ class DashboardForm(ColumnPanel):
     def _on_parse_click(self, **event_args):
         text = (self._nlp_tb.text or '').strip()
         if not text:
-            toast_error("Type an assessment first.")
+            toast_warn("Type an assessment first.")
             return
         try:
             parsed = anvil.server.call('parse_text', text)

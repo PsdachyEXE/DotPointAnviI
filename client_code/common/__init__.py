@@ -5,10 +5,10 @@ from anvil.tables import app_tables
 
 Three jobs:
 
-1. **Navigation** (spec §4). `navigate()` sets the URL hash; Main's hashchange
-   listener re-enters the router, so browser Back and pasted deep links work
-   the same way as an in-app click. `make_top_bar()` builds the shared nav and
-   marks the active tab.
+1. **Navigation** (spec §4). `navigate()` sets the URL hash and re-enters the
+   router; Main separately listens for `hashchange` so the browser's Back and
+   Forward buttons and pasted deep links reach the same router.
+   `make_top_bar()` builds the shared nav and marks the active tab.
 
 2. **Session state** (spec §11/§12). One `get_settings` round-trip per session,
    cached, so the router can gate onboarding and apply the theme without a
@@ -27,15 +27,17 @@ and section 14 (Design system).
 import anvil
 import anvil.server
 import anvil.users
+import datetime
 from anvil import (
     ColumnPanel, FlowPanel, Label, Link, Button, CheckBox, Spacer,
     Notification, open_form,
 )
 
 # --- urgency bands ----------------------------------------------------------
-# Mirror of _constants.URGENCY_COLOURS' keys (the client cannot import server
-# modules; keep in sync). The colours themselves now live in the stylesheet —
-# here we only map a band onto the role name that paints it.
+# Mirror of the band NAMES _datetime._urgency_band can return (the client cannot
+# import server modules; keep in sync). Only the names cross the boundary now —
+# what a band LOOKS like is decided by the stylesheet, so all we do here is map
+# a band onto the role that paints it.
 URGENCY_BANDS = ('overdue', 'today', 'soon', 'distant')
 
 # The server's band name 'today' would collide with the calendar's "is today"
@@ -51,22 +53,62 @@ def band_role(band, prefix):
     return '%s-%s' % (prefix, _BAND_ROLE.get(band, 'distant'))
 
 
+# Parser confidence (FR17) -> chip tone. Shared so the same value never reads
+# as one colour on the dashboard and another in the editor.
+CONF_TONE = {'HIGH': 'ok', 'MEDIUM': 'warn', 'LOW': 'bad'}
+
+
+# --- date formatting ---------------------------------------------------------
+# Skulpt (the browser-side Python) has gaps in strftime/date.isoformat, so the
+# whole app formats dates from their components by hand. These three lived in
+# four different forms with three slightly different implementations; they are
+# shared here so a date reads identically wherever it is shown.
+
+MONTHS_ABBR = ('', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+               'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
+
+
+def from_iso(s):
+    """'YYYY-MM-DD' (or a longer ISO timestamp) -> date, or None."""
+    if not s or not isinstance(s, str) or len(s) < 10:
+        return None
+    try:
+        return datetime.date(int(s[0:4]), int(s[5:7]), int(s[8:10]))
+    except (ValueError, TypeError):
+        return None
+
+
+def fmt_date(d):
+    """date -> 'DD Mon YYYY'. None renders as 'no date'."""
+    if d is None:
+        return 'no date'
+    return '%02d %s %d' % (d.day, MONTHS_ABBR[d.month], d.year)
+
+
+def to_iso(d):
+    """date -> 'YYYY-MM-DD'."""
+    return '%04d-%02d-%02d' % (d.year, d.month, d.day)
+
+
 # --- navigation -------------------------------------------------------------
 
 def navigate(hash_value):
     """Route to `hash_value` (spec §4).
 
-    Setting the hash fires the browser's `hashchange` event, which Main listens
-    for and re-routes on — so an in-app click, the browser Back button and a
-    pasted #link all take exactly the same path. When the hash is already the
-    requested one no event fires, so re-enter the router directly.
+    Deliberately unconditional: set the hash, then re-enter the router. It would
+    be tempting to let Main's hashchange listener do the rendering, but that
+    would make every navigation in the app depend on a browser event firing —
+    and the listener ignores events raised while a dialog is fading out, so a
+    navigation immediately after alert()/confirm() (signing in, finishing
+    onboarding) could be dropped with nothing to fall back on.
+
+    Rendering here instead means the listener only has to handle what it is
+    actually for: the Back/Forward buttons and pasted #links. Main records the
+    hash it last routed to and ignores the echo of our own write, so this does
+    not render twice.
     """
-    current = anvil.get_url_hash()
-    if not isinstance(current, str):
-        current = ''
     anvil.set_url_hash(hash_value)
-    if current == hash_value:
-        open_form('Main')
+    open_form('Main')
 
 
 def _sign_out():
@@ -82,7 +124,7 @@ _NAV_ITEMS = (
     ('notes', 'Notes'),
     ('exams', 'Exams'),
     ('settings', 'Settings'),
-    ('import-export', 'Import/Export'),
+    ('import-export', 'Import & export'),
 )
 
 
@@ -197,8 +239,17 @@ def toast(message, style='success', timeout=4):
 
 
 def toast_error(message):
-    """Errors are shown longer than confirmations — the student has to read them."""
+    """Something failed. Shown longer than a confirmation — it has to be read."""
     return toast(message, style='danger', timeout=6)
+
+
+def toast_warn(message):
+    """Nothing failed; the student just has to fill something in first.
+
+    Kept distinct from toast_error on purpose: an empty text box is not an
+    error, and colouring routine nudges red teaches the student to ignore red.
+    """
+    return toast(message, style='warning', timeout=4)
 
 
 # --- UI kit (spec §14) -------------------------------------------------------
@@ -257,8 +308,12 @@ def make_banner(*components):
 
 
 def make_page_title(title, subtitle=None):
-    """The h1 of a screen, with an optional one-line explanation under it."""
-    panel = ColumnPanel(role='row')
+    """The h1 of a screen, with an optional one-line explanation under it.
+
+    Note the role is 'pagehead', not 'row': this stacks its two lines, so it
+    must not pick up the horizontal row styling.
+    """
+    panel = ColumnPanel(role='pagehead')
     panel.add_component(Label(text=title, role='pagetitle'))
     if subtitle:
         panel.add_component(Label(text=subtitle, role='caption'))

@@ -32,15 +32,15 @@ See IMPLEMENTATION_SPEC.md section 3 (AssessmentEditorForm).
 
 import anvil
 import anvil.server
-import datetime
 from anvil import (
     ColumnPanel, Label, TextBox, TextArea, DropDown, DatePicker,
     CheckBox, Button,
 )
 from ..common import (
-    get_session_settings, make_chip, make_divider, make_empty_state,
-    make_field, make_list_card, make_row, make_section_header, make_toolbar,
-    toast, toast_error,
+    CONF_TONE, fmt_date, from_iso, get_session_settings, make_chip,
+    make_divider, make_empty_state, make_field, make_list_card,
+    make_page_title, make_row, make_section_header, make_toolbar,
+    toast, toast_error, toast_warn,
 )
 
 # Full canonical catalog (mirror of _constants.CANONICAL_SUBJECTS plus the
@@ -72,43 +72,28 @@ SUBJECTS = (
 )
 
 # DropDown items as (display, value) pairs — value is the stored canonical enum.
+# Mirrors of the server enums (the client cannot import server modules; keep in
+# sync). The offline constants-integrity suite in docs/TESTING.md asserts
+# these still match server_code/_constants.py.
 TYPES = (
     ('SAC', 'sac'), ('SAT', 'sat'), ('Exam', 'exam'),
     ('Project', 'project'), ('Homework', 'homework'), ('Other', 'other'),
 )
+# Mirrors of the server enums (the client cannot import server modules; keep in
+# sync). The offline constants-integrity suite in docs/TESTING.md asserts
+# these still match server_code/_constants.py.
 STATUSES = (
     ('Not started', 'not_started'), ('In progress', 'in_progress'),
     ('Completed', 'completed'),
 )
+# Mirrors of the server enums (the client cannot import server modules; keep in
+# sync). The offline constants-integrity suite in docs/TESTING.md asserts
+# these still match server_code/_constants.py.
 REMINDER_DAY_OPTIONS = (14, 7, 3, 2, 1)
 
-# Parser confidence -> chip TONE, not colour. The tone names are roles the
-# stylesheet paints, so the badge re-tints itself in dark mode; an unknown
-# confidence falls through to None, i.e. the neutral chip.
-_CONF_TONE = {'HIGH': 'ok', 'MEDIUM': 'warn', 'LOW': 'bad'}
-
-_MONTHS_ABBR = ('', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-                'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
-
-
-def _from_iso(s):
-    """'YYYY-MM-DD' -> date, or None (manual; avoids Skulpt isoformat quirks)."""
-    if not s or not isinstance(s, str):
-        return None
-    parts = s.split('-')
-    if len(parts) != 3:
-        return None
-    try:
-        return datetime.date(int(parts[0]), int(parts[1]), int(parts[2]))
-    except (ValueError, TypeError):
-        return None
-
-
-def _fmt_date(d):
-    """date -> 'DD Mon YYYY' via components (avoids Skulpt strftime gaps)."""
-    if d is None:
-        return 'no date'
-    return '%02d %s %d' % (d.day, _MONTHS_ABBR[d.month], d.year)
+# Parser confidence -> chip tone, the date helpers and the page heading all come
+# from common now. They used to be copied into this file, which is how the same
+# confidence ended up a different colour here than on the dashboard.
 
 
 class AssessmentEditorForm(ColumnPanel):
@@ -139,7 +124,7 @@ class AssessmentEditorForm(ColumnPanel):
                                 role='pagetitle'))
         if mode == 'preview' and prefill:
             conf = prefill.get('confidence', 'LOW')
-            header.add_component(make_chip(conf, _CONF_TONE.get(conf)))
+            header.add_component(make_chip(conf, CONF_TONE.get(conf)))
         self.add_component(header)
 
         # --- title ---
@@ -205,7 +190,7 @@ class AssessmentEditorForm(ColumnPanel):
         search_btn = Button(text='Search', role='secondary')
         search_btn.set_event_handler('click', self._on_note_search)
         self.add_component(make_toolbar(self._note_search_tb, search_btn))
-        self._note_results = ColumnPanel(spacing_above='none', spacing_below='none')
+        self._note_results = ColumnPanel()
         self.add_component(self._note_results)
         self._linked_pills = make_row()
         self.add_component(self._linked_pills)
@@ -280,8 +265,8 @@ class AssessmentEditorForm(ColumnPanel):
             self._title_tb.text = a.get('title') or ''
             self._select_subject(a.get('subject'))
             self._type_dd.selected_value = a.get('type')
-            self._due_dp.date = _from_iso(a.get('due_date'))
-            self._start_dp.date = _from_iso(a.get('start_date'))
+            self._due_dp.date = from_iso(a.get('due_date'))
+            self._start_dp.date = from_iso(a.get('start_date'))
             if a.get('weight') is not None:
                 self._weight_tb.text = ('%g' % a.get('weight'))
             self._status_dd.selected_value = a.get('status') or 'not_started'
@@ -403,9 +388,11 @@ class AssessmentEditorForm(ColumnPanel):
     # --- bulk mode ---------------------------------------------------------
     def _build_bulk(self):
         """Paste-many UI: parse each line, tick the createable ones, insert atomically."""
-        self.add_component(Label(text='Bulk add assessments', role='pagetitle'))
-        self.add_component(Label(text='Paste one assessment per line, then Parse all.',
-                                 role='caption'))
+        self.add_component(make_page_title(
+            'Bulk add assessments',
+            'Paste one assessment per line, then Parse all.'))
+        # 160px ~= six pasted lines visible at once: enough for the student to
+        # see and proof-read a whole paste without scrolling the box.
         self._bulk_ta = TextArea(
             placeholder='Methods SAC2 due Friday week 5 worth 25%\nPhysics exam 12/06 30%',
             height='160px')
@@ -415,7 +402,7 @@ class AssessmentEditorForm(ColumnPanel):
         parse_btn.set_event_handler('click', self._on_bulk_parse_click)
         self.add_component(make_row(parse_btn))
 
-        self._multi_panel = ColumnPanel(spacing_above='none', spacing_below='none')
+        self._multi_panel = ColumnPanel()
         self.add_component(self._multi_panel)
         self._multi_rows = []   # [(parsed, checkbox), ...]
 
@@ -436,7 +423,7 @@ class AssessmentEditorForm(ColumnPanel):
     def _on_bulk_parse_click(self, **event_args):
         text = (self._bulk_ta.text or '').strip()
         if not text:
-            toast("Paste some lines first.", style='warning')
+            toast_warn("Paste some lines first.")
             return
         try:
             results = anvil.server.call('parse_bulk', text)
@@ -463,15 +450,18 @@ class AssessmentEditorForm(ColumnPanel):
             cb = CheckBox(checked=createable)
             summary = '%s — %s · %s · %s' % (
                 f.get('title') or '(untitled)', f.get('subject') or '?',
-                f.get('type') or '?', _fmt_date(f.get('due_date')))
+                f.get('type') or '?', fmt_date(f.get('due_date')))
             if f.get('weight') is not None:
                 summary += ' · %g%%' % f.get('weight')
-            row = make_row(cb, make_chip(conf, _CONF_TONE.get(conf)),
+            row = make_row(cb, make_chip(conf, CONF_TONE.get(conf)),
                            Label(text=summary))
             if not createable:
+                # Why this line came in unticked, as a plain 'bad' chip. It used
+                # to be a Label with two roles, and two !important colour rules
+                # at the same specificity are decided by stylesheet order — the
+                # chip is one role, and matches every other status chip.
                 reason = 'LOW confidence' if conf == 'LOW' else 'needs subject + due date'
-                row.add_component(Label(text='(%s — unticked)' % reason,
-                                        role=['micro', 't-bad']))
+                row.add_component(make_chip(reason, 'bad'))
             card.add_component(row)
             self._multi_panel.add_component(card)
             self._multi_rows.append((parsed, cb))
@@ -493,7 +483,7 @@ class AssessmentEditorForm(ColumnPanel):
                 'term_info': f.get('term_info'),
             })
         if not records:
-            toast("Nothing ticked to create.", style='warning')
+            toast_warn("Nothing ticked to create.")
             return
         try:
             result = anvil.server.call('create_bulk_assessments', records)

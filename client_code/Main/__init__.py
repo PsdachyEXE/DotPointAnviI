@@ -45,8 +45,10 @@ _ROUTES = {
 }
 
 # Module-level so the browser listener is attached exactly once per session,
-# however many times Main is re-opened.
-_listener = {'installed': False}
+# however many times Main is re-opened. `hash` remembers the route this module
+# last rendered, which is how a hashchange raised by the app's own
+# set_url_hash() is told apart from the user pressing Back.
+_listener = {'installed': False, 'hash': None}
 
 
 def _modal_is_open():
@@ -75,7 +77,22 @@ def _install_hash_listener():
 
 
 def _on_hash_change(event):
+    """Re-route on a hash change the app did not make itself.
+
+    common.navigate() and _route_to_current() both write the hash and then
+    render, so the hashchange those writes raise arrives *after* the right form
+    is already on screen. Re-routing on it would build the same form a second
+    time and repeat its server calls (NFR01 is one round-trip per screen), so
+    an event whose hash matches what we last rendered is ignored. What is left
+    is exactly what this listener is for: Back, Forward, and a #link the user
+    pasted into the address bar.
+    """
     if _modal_is_open():
+        return
+    current = anvil.get_url_hash()
+    if not isinstance(current, str):
+        current = ''
+    if current == _listener['hash']:
         return
     open_form('Main')
 
@@ -139,7 +156,13 @@ class Main(ColumnPanel):
 
         Forms are imported lazily so that routes whose forms don't exist yet
         (built in later slices) never break the router at import time.
+
+        Every route decision above has finished writing the hash by the time it
+        gets here, so this is the point at which to record what is on screen —
+        _on_hash_change compares against it to ignore the echo of our own write.
         """
+        current = anvil.get_url_hash()
+        _listener['hash'] = current if isinstance(current, str) else ''
         self.clear()
         self.add_component(self._make_form(form_name))
 

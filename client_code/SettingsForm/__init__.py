@@ -38,7 +38,7 @@ from anvil import (
 from ..common import (
     make_top_bar, make_page, make_page_title, make_section_header, make_card,
     make_row, make_field, make_chip, make_empty_state, toast, toast_error,
-    SubjectPicker, apply_theme, set_session_settings,
+    SubjectPicker, apply_theme, set_session_settings, from_iso, to_iso,
 )
 
 # Mirrors _constants.ENGLISH_GROUP / MATHS_GROUP (client can't import server
@@ -49,6 +49,8 @@ MATHS_GROUP = ('Foundation Mathematics', 'General Mathematics',
                'Mathematical Methods', 'Specialist Mathematics')
 
 # Reminder-day options offered in the UI (spec §3): N days before due date.
+# Mirrors AssessmentEditorForm.REMINDER_DAY_OPTIONS — the same choices must be
+# offered here as per-assessment; the offline constants suite (docs/TESTING.md) asserts the two copies match.
 REMINDER_DAY_OPTIONS = (14, 7, 3, 2, 1)
 
 # Static IANA Australian timezones (spec §3 / Decision 2).
@@ -66,24 +68,6 @@ _VIC_2026_TERMS = (
     (datetime.date(2026, 7, 13), datetime.date(2026, 9, 18)),
     (datetime.date(2026, 10, 5), datetime.date(2026, 12, 18)),
 )
-
-
-def _to_iso(d):
-    """date -> 'YYYY-MM-DD' (manual; avoids Skulpt date.isoformat differences)."""
-    return '%04d-%02d-%02d' % (d.year, d.month, d.day)
-
-
-def _from_iso(s):
-    """'YYYY-MM-DD' -> date, or None if unparseable."""
-    if not s or not isinstance(s, str):
-        return None
-    parts = s.split('-')
-    if len(parts) != 3:
-        return None
-    try:
-        return datetime.date(int(parts[0]), int(parts[1]), int(parts[2]))
-    except (ValueError, TypeError):
-        return None
 
 
 class SettingsForm(ColumnPanel):
@@ -142,7 +126,8 @@ class SettingsForm(ColumnPanel):
         self._day_checks = {}
         days_row = make_row()
         for d in REMINDER_DAY_OPTIONS:
-            cb = CheckBox(text='%d days' % d, role='pill')
+            cb = CheckBox(text='%d day' % d if d == 1 else '%d days' % d,
+                          role='pill')
             self._day_checks[d] = cb
             days_row.add_component(cb)
         card.add_component(days_row)
@@ -192,7 +177,7 @@ class SettingsForm(ColumnPanel):
         self._timezone_dd = DropDown(items=list(TIMEZONES))
         card.add_component(make_field(
             'Timezone', self._timezone_dd,
-            'Every "due today" and countdown is worked out in this zone.'))
+            hint='Every "due today" and countdown is worked out in this zone.'))
 
         self._theme_dd = DropDown(items=[('Light', 'light'), ('Dark', 'dark')])
         card.add_component(make_field('Theme', self._theme_dd))
@@ -247,8 +232,12 @@ class SettingsForm(ColumnPanel):
         for i, (start_dp, end_dp) in enumerate(self._term_pickers, start=1):
             t = terms_by_num.get(i)
             if t:
-                start_dp.date = _from_iso(t.get('start_date'))
-                end_dp.date = _from_iso(t.get('end_date'))
+                # start_date / end_date are always 'YYYY-MM-DD' strings — the
+                # server validates that shape in notes._validate_school_terms —
+                # so the shared parser reads them the same way everywhere else
+                # in the app does, and still gives None for a missing term.
+                start_dp.date = from_iso(t.get('start_date'))
+                end_dp.date = from_iso(t.get('end_date'))
 
         year = s.get('school_year')
         self._school_year_tb.text = '' if year is None else str(year)
@@ -274,7 +263,7 @@ class SettingsForm(ColumnPanel):
         self._subjects_panel.clear()
         if not self._subjects:
             self._subjects_panel.add_component(make_empty_state(
-                'No subjects locked in yet.',
+                'No subjects locked in yet',
                 'Choose your studies so DotPoint knows what to look for.'))
             return
         chips = make_row()
@@ -352,8 +341,8 @@ class SettingsForm(ColumnPanel):
             if start_dp.date and end_dp.date:
                 terms.append({
                     'term': i,
-                    'start_date': _to_iso(start_dp.date),
-                    'end_date': _to_iso(end_dp.date),
+                    'start_date': to_iso(start_dp.date),
+                    'end_date': to_iso(end_dp.date),
                 })
         fields['school_terms'] = terms
 

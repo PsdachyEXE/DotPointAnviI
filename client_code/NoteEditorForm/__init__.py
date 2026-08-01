@@ -23,9 +23,12 @@ system) - all colour and type here comes from roles, never from Python.
 
 import anvil
 import anvil.server
-from anvil import ColumnPanel, Label, TextBox, TextArea, CheckBox, Button
+from anvil import ColumnPanel, TextBox, TextArea, CheckBox, Button
 
-from ..common import make_field, make_row, make_chip, toast, toast_error
+from ..common import (
+    make_chip, make_divider, make_field, make_page_title, make_row,
+    toast, toast_error,
+)
 
 
 class NoteEditorForm(ColumnPanel):
@@ -40,17 +43,18 @@ class NoteEditorForm(ColumnPanel):
 
         # One heading for the dialog; 'create' and 'edit' share this whole form
         # and differ only in this text and in which server call Save makes.
-        self.add_component(Label(text='New note' if mode == 'create' else 'Edit note',
-                                 role='pagetitle'))
+        # Built by the kit's make_page_title so this dialog's heading is the same
+        # component every other screen uses, rather than a hand-rolled Label.
+        self.add_component(make_page_title('New note' if mode == 'create'
+                                           else 'Edit note'))
 
         self._title_tb = TextBox()
         self.add_component(make_field('Title', self._title_tb))
 
-        # A fixed height is set here (not by a role) because the box has to be
-        # tall enough to write a paragraph in - it is sizing, not styling.
+        # 260px, not a role: a note body needs room to write a paragraph in (sizing, not styling).
         self._content_ta = TextArea(height='260px')
         self.add_component(make_field('Content', self._content_ta,
-                                      hint='Plain text - markdown is not rendered.'))
+                                      hint='Plain text — markdown is not rendered.'))
 
         # The tag editor is one field group: the add-control row is the field's
         # component, and the chips panel is appended to the same group so the
@@ -70,6 +74,11 @@ class NoteEditorForm(ColumnPanel):
         self._pin_cb = CheckBox(text='Pin this note')
         self.add_component(self._pin_cb)
 
+        # --- footer ---
+        # The divider closes off the field stack above, so the two dialog-level
+        # buttons read as the footer and not as one more field. Same pattern as
+        # AssessmentEditorForm.
+        self.add_component(make_divider())
         # Cancel first, Save last, so the confirming action sits on the right
         # where the eye finishes - and Save carries the only primary role.
         cancel_btn = Button(text='Cancel', role='secondary')

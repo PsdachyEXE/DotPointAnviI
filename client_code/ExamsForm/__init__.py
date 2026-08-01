@@ -25,23 +25,28 @@ from anvil import ColumnPanel, Label, Link
 from ..common import (
     navigate, toast_error, make_top_bar, make_page, make_page_title,
     make_row, make_card, make_list_card, make_banner, make_section_header,
-    make_chip, make_band_chip, make_empty_state,
+    make_chip, make_band_chip, make_empty_state, MONTHS_ABBR,
 )
 
+# Only the weekday names are local now: the month abbreviations are the shared
+# common.MONTHS_ABBR, so a month reads identically here and everywhere else.
 _WEEKDAYS = ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')
-_MONTHS_ABBR = ('', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-                'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
 
 
 def _fmt_exam_date(iso):
-    """'2026-11-05' -> 'Thu 5 Nov 2026' (manual; avoids Skulpt strftime gaps)."""
+    """'2026-11-05' -> 'Thu 5 Nov 2026' (manual; avoids Skulpt strftime gaps).
+
+    This form keeps its own formatter because an exam line names the weekday
+    ("Thu 5 Nov 2026") - common.fmt_date gives '05 Nov 2026' with no weekday,
+    and on this screen the weekday is the whole point of showing the date.
+    """
     try:
         parts = iso.split('-')
         d = datetime.date(int(parts[0]), int(parts[1]), int(parts[2]))
     except (ValueError, TypeError, AttributeError, IndexError):
         return iso or ''
     return '%s %d %s %d' % (_WEEKDAYS[d.weekday()], d.day,
-                            _MONTHS_ABBR[d.month], d.year)
+                            MONTHS_ABBR[d.month], d.year)
 
 
 def _days_chip_text(days):
@@ -66,8 +71,10 @@ class ExamsForm(ColumnPanel):
         body = make_page()
         self.add_component(body)
 
+        # Sentence case, like every other page title in the app - Title Case here
+        # was the only heading that did not match.
         body.add_component(make_page_title(
-            'VCE Written Exams 2026',
+            'VCE written exams 2026',
             'Every VCAA written paper for your locked subjects, soonest first.'))
 
         try:
@@ -76,9 +83,14 @@ class ExamsForm(ColumnPanel):
             # The toast carries the actual error text; the empty state is what
             # stops the page being left blank with no explanation.
             toast_error("Couldn't load the exam timetable: %s" % e)
+            # A failure state with no button is a dead end, so it offers the same
+            # Retry as the dashboard's: re-navigating to 'exams' rebuilds the
+            # form and repeats the server call.
             body.add_component(make_empty_state(
                 "Couldn't load the exam timetable",
-                'Check your connection and reload the page.'))
+                'Check your connection and reload the page.',
+                'Retry',
+                lambda: navigate('exams')))
             return
 
         if not data.get('onboarded'):
@@ -100,20 +112,26 @@ class ExamsForm(ColumnPanel):
         if nxt:
             body.add_component(make_banner(
                 Label(text='Next exam', role='sectionhead'),
-                Label(text='%s - %s' % (nxt['subject'], nxt['paper']),
+                # Em dash between subject and paper, and a middot between the
+                # date and the time window - the same two separators the
+                # dashboard and _exam_card use for these exact pairs.
+                Label(text='%s — %s' % (nxt['subject'], nxt['paper']),
                       role='cardtitle'),
                 make_band_chip(_days_chip_text(nxt['days_remaining']),
                                nxt['urgency_band']),
-                Label(text='%s, %s–%s' % (_fmt_exam_date(nxt['date']),
-                                          nxt['start'], nxt['end']),
+                Label(text='%s · %s–%s' % (_fmt_exam_date(nxt['date']),
+                                           nxt['start'], nxt['end']),
                       role='caption'),
             ))
         elif exams:
             # Every paper is behind them - keep the same banner slot so the page
             # does not visibly change shape once exams finish.
+            # 'caption' is the role every other banner sentence in the app uses;
+            # 'muted' is reserved for a single item that has receded (see
+            # _exam_card), not for a whole line of banner copy.
             body.add_component(make_banner(Label(
                 text='All your 2026 written exams are done. Nice work.',
-                role='muted')))
+                role='caption')))
 
         if not exams:
             body.add_component(make_empty_state(
@@ -151,9 +169,12 @@ class ExamsForm(ColumnPanel):
                      'timetable): %s' % ', '.join(not_covered),
                 role='t-warn'))
 
+        # 't-accent', not 'caption': 'caption' only styles .label-text, and a
+        # Link's text sits in .link-text, so a captioned Link kept Anvil's
+        # default blue and ignored the theme.
         info.add_component(Link(
             text='Source: VCAA 2026 VCE examination timetable',
-            url=data.get('source_url'), role='caption'))
+            url=data.get('source_url'), role='t-accent'))
         body.add_component(info)
 
     def _exam_card(self, exam):

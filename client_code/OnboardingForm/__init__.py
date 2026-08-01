@@ -14,22 +14,27 @@ surprise). After locking in, subjects drive the editor dropdown, dashboard
 filter, parser alias priority and the Exams view; they change only via the
 deliberate Settings flow.
 
-Structure (spec §14): a single centred card — make_page() > make_card() —
-holding title, one-line caption, the two program rules as a micro line, the
-pill picker and the two actions. There is deliberately NO top bar: the router
-re-renders this form for every hash until subjects exist, so nav links would
-promise pages the student cannot reach yet. The only ways out are 'Lock in my
-subjects' and 'Sign out'.
+Structure (spec §14): the page title sits on the page body, then a single
+centred card — make_page() > make_page_title() + make_card() — opened by
+make_section_header('Your studies') and holding the two program rules as a
+micro line, the pill picker and the two actions. That is the same shape as
+every other screen (title on the page, card opened by its own section
+header), so onboarding no longer reads as a one-off. There is deliberately NO
+top bar: the router re-renders this form for every hash until subjects exist,
+so nav links would promise pages the student cannot reach yet. The only ways
+out are 'Lock in my subjects' and 'Sign out' — which is also why the
+catalog-load failure below keeps both a retry and a sign out.
 """
 
 import anvil
 import anvil.server
-from anvil import ColumnPanel, Label, Button, Spacer, confirm, open_form
+from anvil import ColumnPanel, Label, Button, confirm, open_form
 
 from ..common import (
     SubjectPicker, set_session_settings, apply_theme, _sign_out,
-    navigate, toast, toast_error,
-    make_page, make_card, make_page_title, make_row, make_empty_state,
+    navigate, toast, toast_error, toast_warn,
+    make_page, make_card, make_page_title, make_section_header, make_row,
+    make_empty_state,
 )
 
 # Mirrors _constants.ENGLISH_GROUP / MATHS_GROUP (client can't import server
@@ -49,35 +54,41 @@ class OnboardingForm(ColumnPanel):
         body = make_page()
         self.add_component(body)
 
-        card = make_card()
-        body.add_component(card)
-
-        # One hierarchy: title -> what it's for -> the rules -> the choice.
-        # The rules sit in a micro line rather than a paragraph because the
-        # student only needs them while they are actually picking.
-        card.add_component(make_page_title(
+        # One hierarchy: page title -> what it's for -> the rules -> the choice.
+        # The title belongs to the page, not to the card, so it lines up with
+        # every other screen; the card below is opened by its own section
+        # header instead of borrowing the h1.
+        body.add_component(make_page_title(
             'What subjects do you do?',
             'Your studies drive the parser, dashboard and exam timetable. '
             'Change them any time in Settings.'))
+
+        card = make_card()
+        body.add_component(card)
+        card.add_component(make_section_header('Your studies'))
+
+        # The rules sit in a micro line rather than a paragraph because the
+        # student only needs them while they are actually picking.
         card.add_component(Label(
             text='One mathematics study is required, and an English-group '
                  'study is always kept (VCAA rule).',
             role='micro'))
-        # The card role neutralises Anvil's per-component margins so that cards
-        # control their own rhythm, so the gaps between the three blocks of this
-        # card are set explicitly rather than inherited.
-        card.add_component(Spacer(height=16))
 
         try:
             catalog = anvil.server.call('get_subject_catalog')
         except Exception as e:
+            # Same split as the rest of the app: the toast carries the raw
+            # server error (useful when debugging), the panel carries a sentence
+            # the student can actually act on.
+            #
             # The router re-renders this form for every hash while the user is
-            # un-onboarded, so a dead-end here would trap them: always offer a
-            # retry and a way out.
+            # un-onboarded, so a dead-end here would trap them behind the
+            # onboarding gate: keep BOTH escape hatches — retry and sign out.
+            toast_error("Couldn't load the subject list: %s" % e)
             card.add_component(make_empty_state(
                 "Couldn't load the subject list",
-                str(e),
-                'Try again',
+                'Check your connection and try again.',
+                'Retry',
                 lambda: open_form('Main')))
             card.add_component(self._sign_out_row())
             return
@@ -87,8 +98,6 @@ class OnboardingForm(ColumnPanel):
         # VCE rules are checked below and again server-side in set_subjects.
         self._picker = SubjectPicker(catalog)
         card.add_component(self._picker)
-
-        card.add_component(Spacer(height=16))
 
         confirm_btn = Button(text='Lock in my subjects', role='primary')
         confirm_btn.set_event_handler('click', self._on_confirm)
@@ -115,7 +124,7 @@ class OnboardingForm(ColumnPanel):
         # then maths, then the English warning (which is a confirm, not a block,
         # because the server can repair it by appending 'English').
         if not selection:
-            toast_error("Pick your subjects first.")
+            toast_warn("Pick your subjects first.")
             return
         if not any(s in MATHS_GROUP for s in selection):
             toast_error("Select at least one mathematics study — DotPoint "

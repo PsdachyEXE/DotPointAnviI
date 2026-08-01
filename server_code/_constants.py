@@ -284,14 +284,13 @@ URGENCY_THRESHOLDS = [
     (9999, 'distant'),
 ]
 
-# Display colours for each urgency band, reused by the list card border and the
-# (later) calendar cell fill so the colour map has a single source of truth.
-URGENCY_COLOURS = {
-    'overdue': '#d64550',   # red
-    'today': '#e8833a',     # orange
-    'soon': '#3b7dd8',      # blue
-    'distant': '#9aa0a6',   # neutral grey
-}
+# Historical note (spec §14): the display colour for each urgency band used to
+# live here and be mirrored by hand into the forms. It now lives in the
+# stylesheet (anvil.yaml native_deps.head_html) as the CSS variables
+# --dp-overdue / --dp-duetoday / --dp-soon / --dp-distant, because a hex value
+# baked into Python cannot change with the light/dark theme. The server's job
+# is to say WHICH band an assessment is in; how that band looks is the client's.
+# The band names above are therefore the whole contract between the two.
 
 # --- Whitelists ------------------------------------------------------------
 ALLOWED_FILTER_KEYS = {'subjects', 'types', 'statuses', 'show_completed', 'sort_by', 'month'}

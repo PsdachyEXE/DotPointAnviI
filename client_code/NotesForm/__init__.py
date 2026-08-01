@@ -26,26 +26,13 @@ from anvil import ColumnPanel, Label, TextBox, Button, DropDown, alert, confirm
 
 from ..common import (
     make_top_bar, make_page, make_page_title, make_toolbar, make_row,
-    make_list_card, make_chip, make_empty_state, toast_error,
+    make_section_header, make_list_card, make_chip, make_empty_state,
+    toast_error, from_iso, fmt_date,
 )
-
-_MONTHS_ABBR = ('', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-                'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
 
 # A preview any longer than this pushes the actions row off a laptop screen and
 # stops the list scanning as a list, so the content is clipped at the card.
 _PREVIEW_CHARS = 160
-
-
-def _fmt_iso(s):
-    """'YYYY-MM-DD...'(ISO) -> 'DD Mon YYYY' or '' (manual; Skulpt-safe)."""
-    if not s or not isinstance(s, str) or len(s) < 10:
-        return ''
-    try:
-        y, m, d = int(s[0:4]), int(s[5:7]), int(s[8:10])
-        return '%02d %s %d' % (d, _MONTHS_ABBR[m], y)
-    except (ValueError, IndexError):
-        return ''
 
 
 class NotesForm(ColumnPanel):
@@ -101,14 +88,18 @@ class NotesForm(ColumnPanel):
                                       query=self._search or None,
                                       tag=self._tag or None)
         except Exception as e:
-            # Show the failure where the list would have been *and* as a toast:
-            # the toast catches the eye, the panel message survives after it
-            # fades. The tag list is deliberately left as-is, because we have no
-            # trustworthy note data to rebuild it from.
+            # Split the two audiences, the same way the other screens do. The
+            # toast carries the raw exception (the detail I need when marking or
+            # debugging) and fades; the panel keeps a sentence a student can act
+            # on plus a Retry button, so a dropped connection is recoverable
+            # without navigating away. The tag list is deliberately left as-is,
+            # because we have no trustworthy note data to rebuild it from.
             self._list_panel.clear()
-            self._list_panel.add_component(
-                make_empty_state("Couldn't load notes", str(e)))
             toast_error("Couldn't load notes: %s" % e)
+            self._list_panel.add_component(
+                make_empty_state("Couldn't load notes",
+                                 'Check your connection and try again.',
+                                 'Retry', self._refresh))
             return
         self._populate_tags(notes)
         self._render(notes)
@@ -132,6 +123,12 @@ class NotesForm(ColumnPanel):
         if not notes:
             self._list_panel.add_component(self._make_empty())
             return
+        # Every other list screen labels its list and shows how many rows are
+        # under the current filters, so this one does too. It is only drawn when
+        # there are notes: the empty state above already names its own situation,
+        # and 'Your notes / 0 shown' over it would just repeat that badly.
+        self._list_panel.add_component(
+            make_section_header('Your notes', '%d shown' % len(notes)))
         for n in notes:
             self._list_panel.add_component(self._make_card(n))
 
@@ -149,7 +146,7 @@ class NotesForm(ColumnPanel):
                 'New note', self._on_new_click)
         return make_empty_state(
             'No notes yet',
-            'Notes are for anything that is not an assessment - study plans, '
+            'Notes are for anything that is not an assessment — study plans, '
             'reminders, ideas.',
             'New note', self._on_new_click)
 
@@ -181,8 +178,15 @@ class NotesForm(ColumnPanel):
             preview = preview[:_PREVIEW_CHARS] + '…'
         if preview:
             card.add_component(Label(text=preview, role='caption'))
-        card.add_component(Label(text='Updated %s' % _fmt_iso(n.get('updated_at')),
-                                 role='micro'))
+        # updated_at is a server-produced ISO timestamp string, so the shared
+        # from_iso + fmt_date pair gives exactly the 'DD Mon YYYY' the old local
+        # helper produced. The one difference is the missing case: fmt_date(None)
+        # says 'no date', which reads as a fact about the note rather than a gap
+        # in the data, so an unparseable timestamp still renders as nothing here.
+        updated = from_iso(n.get('updated_at'))
+        card.add_component(
+            Label(text='Updated %s' % (fmt_date(updated) if updated else ''),
+                  role='micro'))
 
         # Quiet 'ghost' actions so the row stays readable; Delete is the only
         # destructive one, so it is the only one that reddens on hover.

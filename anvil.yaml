@@ -381,9 +381,11 @@ native_deps:
     .anvil-role-micro,   .anvil-role-micro .label-text   {
       font-size:var(--dp-fs-micro) !important; color:var(--dp-faint) !important; }
 
-    /* kept from the first theme so nothing breaks mid-refactor */
-    .anvil-role-heading, .anvil-role-heading * {
-      font-weight:700 !important; color:var(--dp-heading); }
+    /* the h1 block of a screen: title, then an optional one-line explanation */
+    .anvil-role-pagehead { margin:0 0 var(--dp-s4) 0 !important; padding:0 !important; }
+    .anvil-role-pagehead .anvil-component { margin:0 !important; }
+    .anvil-role-pagehead > .anvil-panel-section + .anvil-panel-section {
+      margin-top:var(--dp-s1); }
 
     /* ---------- 5. Semantic text tones ---------- */
     /* One class per meaning, so a form never writes a hex colour again. */
@@ -643,9 +645,12 @@ native_deps:
       text-align:left; text-decoration:none !important;
       transition:background .12s ease, border-color .12s ease; }
     .anvil-role-calcell-blank { visibility:hidden; }
-    .anvil-role-calcell:hover, .anvil-role-calcell-overdue:hover,
-    .anvil-role-calcell-duetoday:hover, .anvil-role-calcell-soon:hover,
-    .anvil-role-calcell-distant:hover { border-color:var(--dp-border-strong); }
+    /* Only a day with something on it is a Link, so only those get the hover
+       affordance — an empty square is a plain panel and must not look clickable. */
+    a.anvil-role-calcell:hover, a.anvil-role-calcell-overdue:hover,
+    a.anvil-role-calcell-duetoday:hover, a.anvil-role-calcell-soon:hover,
+    a.anvil-role-calcell-distant:hover { border-color:var(--dp-border-strong); }
+    a[class*="anvil-role-calcell"] { cursor:pointer; }
     .anvil-role-calcell-overdue  { background:var(--dp-overdue-soft); }
     .anvil-role-calcell-duetoday { background:var(--dp-duetoday-soft); }
     .anvil-role-calcell-soon     { background:var(--dp-soon-soft); }
@@ -751,6 +756,14 @@ native_deps:
     [data-notify="container"].alert-info    { border-left-color:var(--dp-accent) !important; }
     [data-notify="container"] .close {
       color:var(--dp-muted) !important; opacity:.7; text-shadow:none !important; }
+    /* bootstrap-notify positions each toast independently, so forcing them all to
+       the same corner would pile them exactly on top of each other. The general
+       sibling combinator offsets the 2nd and 3rd upwards (common.toast caps the
+       stack at 3, so there is never a 4th to place). */
+    [data-notify="container"] ~ [data-notify="container"] {
+      bottom:92px !important; }
+    [data-notify="container"] ~ [data-notify="container"] ~ [data-notify="container"] {
+      bottom:164px !important; }
 
     /* ---------- 15. Responsive ---------- */
     /* Anvil's GridPanel emits col-xs-N AND col-sm/md/lg-N for the same number, so
