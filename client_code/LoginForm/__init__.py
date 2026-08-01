@@ -12,16 +12,24 @@ app's full users-table access and sidestep that path. Revert to
 login_with_form/signup_with_form once the binding is fixed (Anvil support / table
 permission re-apply).
 
-Layout note: this theme defines no custom roles, so styling uses direct Label
-properties rather than role='display-1'.
+Layout: this is the only screen with no top bar and no nav — a logged-out user
+has nowhere else to go, so the page is a single centred role='authcard' holding
+the wordmark, a one-line pitch, and the two ways in. The type scale comes
+entirely from the roles ('display' / 'caption' / 'micro'), so the card follows
+the light and dark palettes without this form knowing a single colour.
+
+Credentials are collected by _prompt_credentials(), which reuses the shared
+make_field() builder so the dialog reads as part of the app rather than as a raw
+Bootstrap form.
 
 See IMPLEMENTATION_SPEC.md section 3 (LoginForm) and section 5 (Authentication).
 """
 
-import anvil
 import anvil.server
-from anvil import (
-    ColumnPanel, Label, Button, Spacer, TextBox, Notification, alert, open_form,
+from anvil import ColumnPanel, Label, Button, Spacer, TextBox, alert
+
+from ..common import (
+    navigate, toast_error, make_field, make_divider, clear_session_settings,
 )
 
 
@@ -31,23 +39,31 @@ class LoginForm(ColumnPanel):
         self.spacing_above = 'none'
         self.spacing_below = 'none'
 
+        # The one deliberate pixel value in this form. The card is the only
+        # thing on the page, so it needs to be pushed off the top edge to sit
+        # near the optical centre; there is no sibling content to space against.
         self.add_component(Spacer(height=72))
 
         card = ColumnPanel(role='authcard')
+
+        # Identity block: what the app is called, then what it is, then what it
+        # does — three lines of decreasing weight so the eye lands on the
+        # wordmark first and the pitch is read only if the user wants it.
         card.add_component(Label(text='DotPoint', align='center',
-                                 font_size=40, bold=True))
+                                 role='display'))
         card.add_component(Label(text='Assessment Tracker', align='center',
-                                 font_size=16, foreground='#6b7280'))
+                                 role='caption'))
         card.add_component(Label(
             text='Type "Methods SAC2 due Friday week 5 worth 25%" and it\'s tracked.',
-            align='center', font_size=12, italic=True, foreground='#9aa0a6'))
-        card.add_component(Spacer(height=20))
+            align='center', role='micro'))
+
+        # A rule, not a gap: it separates "what this is" from "what you do
+        # next", which is the only hierarchy this screen needs.
+        card.add_component(make_divider())
 
         sign_in = Button(text='Sign in', role='primary', align='center')
         sign_in.set_event_handler('click', self._on_sign_in_click)
         card.add_component(sign_in)
-
-        card.add_component(Spacer(height=6))
 
         sign_up = Button(text='Create an account', role='secondary', align='center')
         sign_up.set_event_handler('click', self._on_sign_up_click)
@@ -57,14 +73,24 @@ class LoginForm(ColumnPanel):
 
     # --- credential prompt -------------------------------------------------
     def _prompt_credentials(self, title, action_label):
-        """Show an email + password dialog. Returns (email, password) or None."""
+        """Show an email + password dialog. Returns (email, password) or None.
+
+        Both fields go through make_field() so the label/control pairing and
+        spacing match every other form in the app. `action_label` is the
+        affirmative button's text, so the same dialog serves sign-in and
+        sign-up without the caller needing two builders.
+        """
         panel = ColumnPanel()
-        panel.add_component(Label(text='Email'))
+        panel.spacing_above = 'none'
+        panel.spacing_below = 'none'
+
         email_box = TextBox(placeholder='email@example.com')
-        panel.add_component(email_box)
-        panel.add_component(Label(text='Password'))
-        password_box = TextBox(placeholder='password', hide_text=True)
-        panel.add_component(password_box)
+        panel.add_component(make_field('Email', email_box))
+
+        # hide_text is what makes this a password field; the label already says
+        # 'Password', so a placeholder repeating it would just be noise.
+        password_box = TextBox(hide_text=True)
+        panel.add_component(make_field('Password', password_box))
 
         confirmed = alert(panel, title=title,
                           buttons=[(action_label, True), ('Cancel', False)])
@@ -85,16 +111,19 @@ class LoginForm(ColumnPanel):
             return  # cancelled
         email, password = creds
         if not email or not password:
-            Notification("Email and password are required.", style='danger', timeout=4).show()
+            toast_error('Email and password are required.')
             return
         try:
             anvil.server.call(server_fn, email, password)
         except Exception as e:
-            Notification(str(e), style='danger', timeout=4).show()
+            # The server raises with a message written for the student
+            # ("That email is already registered."), so show it as-is.
+            toast_error(str(e))
             return
         # Fresh account context: never reuse a previous session's cached
         # settings (theme / onboarding gate read them on the next route).
-        from ..common import clear_session_settings
         clear_session_settings()
-        anvil.set_url_hash('dashboard')
-        open_form('Main')
+        # Only set the hash — Main listens for hashchange and re-renders
+        # itself. Calling open_form('Main') as well would draw the dashboard
+        # twice, and the second pass would re-run every server call on it.
+        navigate('dashboard')

@@ -8,21 +8,27 @@ auth state, and renders the matching top-level form *inside itself* via
 add_component. Logged-out users are forced to LoginForm; logged-in users hitting
 '#login' are bounced to the dashboard.
 
+Browser navigation (spec §14): the router also listens for the browser's
+`hashchange` event, so the Back/Forward buttons and pasted '#notes'-style deep
+links re-route immediately instead of needing a full page reload. The listener
+is installed once per session and ignores events raised while a modal dialog is
+open, so hitting Back mid-dialog cannot redraw the page behind it.
+
 Onboarding gate (spec §11): a logged-in user with no locked-in subjects is
 forced to OnboardingForm whatever hash they hit, so the "What subjects do you
 do?" step is truly mandatory. The check reads common.get_session_settings()
 (one get_settings round-trip per session, cached), which also lets the router
 apply the user's theme on every navigation.
 
-Child forms navigate by calling anvil.set_url_hash(...) then open_form('Main'),
-which re-enters this router (see client_code/common.make_top_bar).
+Child forms navigate by calling common.navigate(...), which sets the hash and
+lets the listener above re-enter this router.
 
 See IMPLEMENTATION_SPEC.md section 4 (Routing) and section 5 (Authentication).
 """
 
 import anvil
 import anvil.users
-from anvil import ColumnPanel
+from anvil import ColumnPanel, open_form
 
 from ..common import get_session_settings, apply_theme
 
@@ -38,12 +44,48 @@ _ROUTES = {
     'onboarding': 'OnboardingForm',
 }
 
+# Module-level so the browser listener is attached exactly once per session,
+# however many times Main is re-opened.
+_listener = {'installed': False}
+
+
+def _modal_is_open():
+    """True while an Anvil alert()/confirm() dialog is showing.
+
+    Anvil builds those on Bootstrap modals, which carry the class 'in' while
+    visible. Re-routing underneath an open dialog would leave the user looking
+    at a stale page once they dismissed it, so hashchange is ignored then.
+    """
+    try:
+        from anvil.js.window import document
+        return document.querySelector('.modal.in') is not None
+    except Exception:
+        return False
+
+
+def _install_hash_listener():
+    if _listener['installed']:
+        return
+    try:
+        from anvil.js.window import window
+    except Exception:
+        return  # no browser (e.g. a test harness) — routing still works on open
+    window.addEventListener('hashchange', _on_hash_change)
+    _listener['installed'] = True
+
+
+def _on_hash_change(event):
+    if _modal_is_open():
+        return
+    open_form('Main')
+
 
 class Main(ColumnPanel):
     def __init__(self, **properties):
         super().__init__(**properties)
         self.spacing_above = 'none'
         self.spacing_below = 'none'
+        _install_hash_listener()
         self._route_to_current()
 
     def _route_to_current(self):

@@ -207,95 +207,538 @@ metadata: {description: 'Assessment tracker for VCE students (Anvil port of C:\C
 native_deps:
   head_html: |
     <style>
-    /* ---- DotPoint theme (SAT 5 §2 design language) ----
-       All colours are CSS variables so the Settings theme picker can flip the
-       whole app between light (default) and dark by toggling body.dotpoint-dark
-       (see client_code/common.apply_theme). */
+    /* ==================================================================
+       DotPoint design system (spec §14)
+
+       ONE stylesheet, ONE source of truth. Every colour, size, radius and
+       space in the app is declared here as a CSS custom property, so:
+         * the Settings theme picker flips the whole app light <-> dark by
+           toggling the single class `dotpoint-dark` on <body>
+           (client_code/common.apply_theme), and
+         * no Python form hardcodes a colour any more — forms pass a
+           role='...' and this sheet decides how that role looks.
+
+       Anvil turns role='card' into the DOM class .anvil-role-card on a
+       component's outer element, so every rule is written against
+       .anvil-role-<name>. The nested selectors (.label-text, .link-text,
+       .flow-panel-gutter, .checkbox, ...) are Anvil's own markup: they were
+       read off the running app with devtools, not guessed.
+       ================================================================== */
+
+    /* ---------- 1. Tokens — light (default) ---------- */
     :root {
-      --dp-bg:#f5f7fa;          --dp-text:#1f2933;
-      --dp-surface:#ffffff;     --dp-border:#e5e7eb;
-      --dp-heading:#111827;     --dp-muted:#6b7280;
-      --dp-accent:#2f6fd0;      --dp-accent-hover:#245ab0;
-      --dp-btn2-bg:#ffffff;     --dp-btn2-text:#374151;
-      --dp-btn2-hover:#f3f4f6;  --dp-input-border:#d1d5db;
-      --dp-chip-bg:#eef2f7;     --dp-chip-border:#e0e6ee;
-      --dp-chip-text:#4b5563;
-      --dp-shadow:rgba(16,24,40,.06); --dp-shadow-lg:rgba(16,24,40,.08);
-    }
-    body.dotpoint-dark {
-      --dp-bg:#0f172a;          --dp-text:#e2e8f0;
-      --dp-surface:#1e293b;     --dp-border:#334155;
-      --dp-heading:#f1f5f9;     --dp-muted:#94a3b8;
-      --dp-accent:#3b82f6;      --dp-accent-hover:#2563eb;
-      --dp-btn2-bg:#1e293b;     --dp-btn2-text:#cbd5e1;
-      --dp-btn2-hover:#334155;  --dp-input-border:#475569;
-      --dp-chip-bg:#334155;     --dp-chip-border:#475569;
-      --dp-chip-text:#cbd5e1;
-      --dp-shadow:rgba(0,0,0,.35); --dp-shadow-lg:rgba(0,0,0,.5);
+      /* spacing scale, 4px base */
+      --dp-s1:4px;  --dp-s2:8px;  --dp-s3:12px; --dp-s4:16px;
+      --dp-s5:24px; --dp-s6:32px; --dp-s7:48px;
+
+      /* corner radii */
+      --dp-r-sm:6px; --dp-r-md:10px; --dp-r-lg:16px; --dp-r-pill:999px;
+
+      /* type scale */
+      --dp-fs-display:34px;   /* login wordmark          */
+      --dp-fs-page:22px;      /* page title              */
+      --dp-fs-card:15px;      /* card title              */
+      --dp-fs-body:14px;      /* body copy               */
+      --dp-fs-cap:12.5px;     /* captions / meta         */
+      --dp-fs-micro:11px;     /* section headers, badges */
+
+      /* neutral surfaces + text */
+      --dp-bg:#f4f6f8;
+      --dp-surface:#ffffff;
+      --dp-surface-2:#f0f2f5;
+      --dp-border:#e6e9ee;
+      --dp-border-strong:#d5dae2;
+      --dp-heading:#0f172a;
+      --dp-text:#26303c;
+      --dp-muted:#667085;
+      --dp-faint:#8b95a5;
+
+      /* brand accent */
+      --dp-accent:#2f6fd0;
+      --dp-accent-hover:#245ab0;
+      --dp-accent-soft:#e8f0fc;
+      --dp-focus:rgba(47,111,208,.18);
+
+      /* controls */
+      --dp-btn2-bg:#ffffff; --dp-btn2-text:#3d4753; --dp-btn2-hover:#f0f2f5;
+      --dp-input-border:#d5dae2;
+      --dp-chip-bg:#eef1f5;  --dp-chip-border:#e3e8ee; --dp-chip-text:#4b5563;
+
+      /* elevation */
+      --dp-shadow:rgba(16,24,40,.05);
+      --dp-shadow-lg:rgba(16,24,40,.10);
+
+      /* semantic — urgency bands (mirror _constants.URGENCY_COLOURS) */
+      --dp-overdue:#c8384a;  --dp-overdue-soft:#fdeaec;
+      --dp-duetoday:#c06a12; --dp-duetoday-soft:#fdf1e2;
+      --dp-soon:#2f6fd0;     --dp-soon-soft:#e8f0fc;
+      --dp-distant:#78828f;  --dp-distant-soft:#eef0f3;
+
+      /* semantic — parser confidence */
+      --dp-ok:#1f7a37; --dp-warn:#c06a12; --dp-bad:#c8384a;
+
+      /* semantic — VCE exam marker */
+      --dp-exam:#6d3ce0; --dp-exam-soft:#f1ebfd;
     }
 
-    body { background:var(--dp-bg) !important; color:var(--dp-text);
-           font-family:'Segoe UI',system-ui,-apple-system,Roboto,Arial,sans-serif; }
+    /* ---------- 2. Tokens — dark ---------- */
+    /* Only colours are re-declared; spacing/type/radii are shared. The semantic
+       hues are lightened rather than reused, so they stay legible on a dark
+       surface while remaining recognisably the same colour. */
+    body.dotpoint-dark {
+      --dp-bg:#0e1520;
+      --dp-surface:#18202d;
+      --dp-surface-2:#212b3a;
+      --dp-border:#2a3547;
+      --dp-border-strong:#3b4859;
+      --dp-heading:#f1f5f9;
+      --dp-text:#dde5ef;
+      --dp-muted:#9aa7b8;
+      --dp-faint:#7d8a9c;
+
+      --dp-accent:#5c9dff;
+      --dp-accent-hover:#8ab8ff;
+      --dp-accent-soft:#1c2d47;
+      --dp-focus:rgba(92,157,255,.25);
+
+      --dp-btn2-bg:#212b3a; --dp-btn2-text:#c9d4e2; --dp-btn2-hover:#2b3646;
+      --dp-input-border:#3b4859;
+      --dp-chip-bg:#25303f;  --dp-chip-border:#334154; --dp-chip-text:#c1cddb;
+
+      --dp-shadow:rgba(0,0,0,.30);
+      --dp-shadow-lg:rgba(0,0,0,.45);
+
+      --dp-overdue:#ff8b98;  --dp-overdue-soft:#3a1f25;
+      --dp-duetoday:#f2a742; --dp-duetoday-soft:#382a18;
+      --dp-soon:#7db0ff;     --dp-soon-soft:#1c2d47;
+      --dp-distant:#93a0b2;  --dp-distant-soft:#232d3c;
+
+      --dp-ok:#5fd18a; --dp-warn:#f2a742; --dp-bad:#ff8b98;
+
+      --dp-exam:#b494ff; --dp-exam-soft:#282040;
+    }
+
+    /* ---------- 3. Base ---------- */
+    body {
+      background:var(--dp-bg) !important;
+      color:var(--dp-text);
+      font-family:'Segoe UI',system-ui,-apple-system,Roboto,Arial,sans-serif;
+      font-size:var(--dp-fs-body);
+      -webkit-font-smoothing:antialiased;
+    }
     a, .anvil-component a { color:var(--dp-accent); }
 
-    /* Buttons: role='primary' (blue CTA) / role='secondary' (ghost) */
-    .anvil-role-primary button {
-      background:var(--dp-accent) !important; color:#ffffff !important;
-      border:1px solid var(--dp-accent) !important; border-radius:8px !important;
-      padding:6px 18px !important; font-weight:600 !important; }
-    .anvil-role-primary button:hover { background:var(--dp-accent-hover) !important; }
-    .anvil-role-secondary button {
-      background:var(--dp-btn2-bg) !important; color:var(--dp-btn2-text) !important;
-      border:1px solid var(--dp-input-border) !important; border-radius:8px !important;
-      padding:5px 14px !important; }
-    .anvil-role-secondary button:hover { background:var(--dp-btn2-hover) !important; }
+    /* Anvil gives every component 'anvil-spacing-*-small' margins. Inside our own
+       rows/cards we control spacing ourselves, so neutralise them there. */
+    .anvil-role-toolbar .anvil-component,
+    .anvil-role-card .anvil-component,
+    .anvil-role-listcard .anvil-component,
+    .anvil-role-calgrid .anvil-component {
+      margin-top:0 !important; margin-bottom:0 !important;
+    }
 
-    /* Headings: role='heading' */
+    /* The centred content column every page sits in. */
+    .anvil-role-page { max-width:1180px; margin:0 auto !important;
+      padding:0 var(--dp-s4) var(--dp-s7) var(--dp-s4) !important; }
+
+    /* ---------- 4. Typography roles ---------- */
+    .anvil-role-display, .anvil-role-display .label-text {
+      font-size:var(--dp-fs-display) !important; font-weight:700 !important;
+      color:var(--dp-heading) !important; letter-spacing:-.5px; }
+
+    .anvil-role-pagetitle, .anvil-role-pagetitle .label-text {
+      font-size:var(--dp-fs-page) !important; font-weight:700 !important;
+      color:var(--dp-heading) !important; letter-spacing:-.2px; }
+
+    /* Small, tracked, upper-case label that opens a section. */
+    .anvil-role-sectionhead, .anvil-role-sectionhead .label-text {
+      font-size:var(--dp-fs-micro) !important; font-weight:700 !important;
+      color:var(--dp-faint) !important; text-transform:uppercase;
+      letter-spacing:.09em; }
+
+    .anvil-role-cardtitle, .anvil-role-cardtitle .label-text {
+      font-size:var(--dp-fs-card) !important; font-weight:600 !important;
+      color:var(--dp-heading) !important; }
+
+    .anvil-role-muted,   .anvil-role-muted .label-text   { color:var(--dp-muted) !important; }
+    .anvil-role-caption, .anvil-role-caption .label-text {
+      font-size:var(--dp-fs-cap) !important; color:var(--dp-muted) !important; }
+    .anvil-role-micro,   .anvil-role-micro .label-text   {
+      font-size:var(--dp-fs-micro) !important; color:var(--dp-faint) !important; }
+
+    /* kept from the first theme so nothing breaks mid-refactor */
     .anvil-role-heading, .anvil-role-heading * {
       font-weight:700 !important; color:var(--dp-heading); }
 
-    /* Cards: role='card' — surface, soft border + shadow */
+    /* ---------- 5. Semantic text tones ---------- */
+    /* One class per meaning, so a form never writes a hex colour again. */
+    .anvil-role-t-overdue,  .anvil-role-t-overdue .label-text  { color:var(--dp-overdue) !important; }
+    .anvil-role-t-duetoday, .anvil-role-t-duetoday .label-text { color:var(--dp-duetoday) !important; }
+    .anvil-role-t-soon,     .anvil-role-t-soon .label-text     { color:var(--dp-soon) !important; }
+    .anvil-role-t-distant,  .anvil-role-t-distant .label-text  { color:var(--dp-distant) !important; }
+    .anvil-role-t-exam,     .anvil-role-t-exam .label-text     { color:var(--dp-exam) !important; }
+    .anvil-role-t-ok,       .anvil-role-t-ok .label-text       { color:var(--dp-ok) !important; }
+    .anvil-role-t-warn,     .anvil-role-t-warn .label-text     { color:var(--dp-warn) !important; }
+    .anvil-role-t-bad,      .anvil-role-t-bad .label-text      { color:var(--dp-bad) !important; }
+    .anvil-role-t-accent,   .anvil-role-t-accent .label-text,
+    .anvil-role-t-accent .link-text                            { color:var(--dp-accent) !important; }
+    /* tone helpers also work on the caption size */
+    .anvil-role-t-overdue .label-text, .anvil-role-t-duetoday .label-text,
+    .anvil-role-t-soon .label-text,    .anvil-role-t-distant .label-text { font-weight:600; }
+
+    /* ---------- 6. Top bar ---------- */
+    .anvil-role-topbar {
+      background:var(--dp-surface);
+      border-bottom:1px solid var(--dp-border);
+      padding:0 var(--dp-s5) !important;
+      margin:0 0 var(--dp-s5) 0 !important;
+    }
+    .anvil-role-topbar .flow-panel-gutter { align-items:center; gap:var(--dp-s1); }
+    .anvil-role-topbar .anvil-component { margin:0 !important; }
+
+    .anvil-role-brand .link-text {
+      font-size:17px !important; font-weight:700 !important;
+      color:var(--dp-heading) !important; letter-spacing:-.2px; }
+    .anvil-role-brand { padding:14px var(--dp-s4) 14px 0 !important; }
+
+    /* nav items: quiet by default, a solid underline marks the active tab */
+    .anvil-role-navitem, .anvil-role-navitem-active {
+      padding:14px var(--dp-s3) !important; border-bottom:2px solid transparent; }
+    .anvil-role-navitem .link-text {
+      color:var(--dp-muted) !important; font-size:var(--dp-fs-body) !important; }
+    .anvil-role-navitem:hover { background:var(--dp-surface-2); }
+    .anvil-role-navitem:hover .link-text { color:var(--dp-text) !important; }
+    .anvil-role-navitem-active { border-bottom-color:var(--dp-accent); }
+    .anvil-role-navitem-active .link-text {
+      color:var(--dp-heading) !important; font-weight:600 !important;
+      font-size:var(--dp-fs-body) !important; }
+    /* the last item of the bar (Sign out) is pushed to the right edge, so no
+       spacer component is needed in make_top_bar */
+    .anvil-role-topbar > .flow-panel-gutter > .flow-panel-item:last-child {
+      margin-left:auto; }
+
+    /* ---------- 7. Surfaces ---------- */
     .anvil-role-card {
       background:var(--dp-surface); border:1px solid var(--dp-border);
-      border-radius:10px; box-shadow:0 1px 3px var(--dp-shadow);
-      padding:12px 16px !important; margin:8px 0 !important; }
+      border-radius:var(--dp-r-md); box-shadow:0 1px 2px var(--dp-shadow);
+      padding:var(--dp-s4) var(--dp-s4) !important;
+      margin:0 0 var(--dp-s3) 0 !important; }
 
-    /* Top navigation bar: role='topbar' */
-    .anvil-role-topbar {
-      background:var(--dp-surface); border-bottom:1px solid var(--dp-border);
-      padding:10px 16px !important; margin-bottom:10px !important;
-      box-shadow:0 1px 2px var(--dp-shadow); }
+    /* a list row: same surface, left accent bar carries urgency, hover affordance */
+    .anvil-role-listcard, .anvil-role-listcard-overdue,
+    .anvil-role-listcard-duetoday, .anvil-role-listcard-soon,
+    .anvil-role-listcard-distant {
+      background:var(--dp-surface); border:1px solid var(--dp-border);
+      border-left:3px solid var(--dp-border-strong);
+      border-radius:var(--dp-r-md);
+      padding:var(--dp-s3) var(--dp-s4) !important;
+      margin:0 0 var(--dp-s2) 0 !important;
+      transition:box-shadow .12s ease, border-color .12s ease; }
+    .anvil-role-listcard:hover, .anvil-role-listcard-overdue:hover,
+    .anvil-role-listcard-duetoday:hover, .anvil-role-listcard-soon:hover,
+    .anvil-role-listcard-distant:hover { box-shadow:0 2px 8px var(--dp-shadow-lg); }
+    .anvil-role-listcard-overdue  { border-left-color:var(--dp-overdue); }
+    .anvil-role-listcard-duetoday { border-left-color:var(--dp-duetoday); }
+    .anvil-role-listcard-soon     { border-left-color:var(--dp-soon); }
+    .anvil-role-listcard-distant  { border-left-color:var(--dp-distant); }
 
-    /* Inputs (TextBox / TextArea / DropDown / DatePicker) */
-    .form-control, select.form-control, textarea.form-control {
-      border-radius:8px !important; border:1px solid var(--dp-input-border) !important;
-      background:var(--dp-surface) !important; color:var(--dp-text) !important;
+    /* a quiet full-width strip (tips, next-exam) — no border, tinted fill */
+    .anvil-role-banner {
+      background:var(--dp-surface); border:1px solid var(--dp-border);
+      border-radius:var(--dp-r-md); padding:var(--dp-s3) var(--dp-s4) !important;
+      margin:0 0 var(--dp-s4) 0 !important; }
+    .anvil-role-banner .flow-panel-gutter { align-items:center; gap:var(--dp-s2);
+      flex-wrap:wrap; }
+    .anvil-role-banner .anvil-component { margin:0 !important; }
+
+    /* a dashboard column: no chrome, just rhythm */
+    .anvil-role-panel { padding:0 var(--dp-s2) !important; }
+
+    /* row of controls that wraps neatly and stays vertically centred */
+    .anvil-role-toolbar { margin:0 0 var(--dp-s3) 0 !important; }
+    .anvil-role-toolbar .flow-panel-gutter {
+      align-items:center; gap:var(--dp-s2); flex-wrap:wrap; }
+
+    /* a compact inline row inside a card (chips, meta, actions) */
+    .anvil-role-row .flow-panel-gutter {
+      align-items:center; gap:var(--dp-s2); flex-wrap:wrap; }
+    .anvil-role-row { margin:0 !important; }
+    .anvil-role-row .anvil-component { margin:0 !important; }
+
+    .anvil-role-divider { border-top:1px solid var(--dp-border);
+      margin:var(--dp-s4) 0 !important; height:0 !important; }
+
+    /* a labelled form control: caption, control, optional hint */
+    .anvil-role-field { margin:0 0 var(--dp-s3) 0 !important; padding:0 !important; }
+    .anvil-role-field .anvil-component { margin:0 !important; }
+    .anvil-role-field .anvil-panel-section + .anvil-panel-section { margin-top:3px; }
+
+    /* empty states: centred, quiet, never a bare sentence in the corner */
+    .anvil-role-empty {
+      border:1px dashed var(--dp-border-strong); border-radius:var(--dp-r-md);
+      background:transparent; text-align:center;
+      padding:var(--dp-s6) var(--dp-s4) !important;
+      margin:0 0 var(--dp-s3) 0 !important; }
+    .anvil-role-empty .anvil-component { margin:2px auto !important; }
+
+    /* login card */
+    .anvil-role-authcard {
+      background:var(--dp-surface); border:1px solid var(--dp-border);
+      border-radius:var(--dp-r-lg); box-shadow:0 8px 30px var(--dp-shadow-lg);
+      max-width:400px; margin:0 auto !important;
+      padding:var(--dp-s7) var(--dp-s6) !important; }
+
+    /* ---------- 8. Buttons ---------- */
+    .anvil-role-primary button {
+      background:var(--dp-accent) !important; color:#fff !important;
+      border:1px solid var(--dp-accent) !important;
+      border-radius:var(--dp-r-sm) !important;
+      padding:7px 18px !important; font-weight:600 !important;
+      font-size:var(--dp-fs-body) !important; box-shadow:none !important; }
+    .anvil-role-primary button:hover { background:var(--dp-accent-hover) !important;
+      border-color:var(--dp-accent-hover) !important; }
+
+    .anvil-role-secondary button {
+      background:var(--dp-btn2-bg) !important; color:var(--dp-btn2-text) !important;
+      border:1px solid var(--dp-input-border) !important;
+      border-radius:var(--dp-r-sm) !important;
+      padding:6px 14px !important; font-size:var(--dp-fs-body) !important;
       box-shadow:none !important; }
+    .anvil-role-secondary button:hover { background:var(--dp-btn2-hover) !important; }
+
+    /* borderless text button for low-weight actions (Edit / Delete / x) */
+    .anvil-role-ghost button {
+      background:transparent !important; color:var(--dp-muted) !important;
+      border:1px solid transparent !important;
+      border-radius:var(--dp-r-sm) !important;
+      padding:4px 10px !important; font-size:var(--dp-fs-cap) !important;
+      box-shadow:none !important; }
+    .anvil-role-ghost button:hover {
+      background:var(--dp-surface-2) !important; color:var(--dp-text) !important; }
+    .anvil-role-danger button {
+      background:transparent !important; color:var(--dp-muted) !important;
+      border:1px solid transparent !important;
+      border-radius:var(--dp-r-sm) !important;
+      padding:4px 10px !important; font-size:var(--dp-fs-cap) !important; }
+    .anvil-role-danger button:hover {
+      background:var(--dp-overdue-soft) !important; color:var(--dp-overdue) !important; }
+
+    /* small square button (month arrows, pill remove) */
+    .anvil-role-iconbtn button {
+      background:transparent !important; color:var(--dp-muted) !important;
+      border:1px solid var(--dp-border) !important;
+      border-radius:var(--dp-r-sm) !important;
+      padding:2px 9px !important; line-height:1.6 !important;
+      font-size:var(--dp-fs-cap) !important; box-shadow:none !important; }
+    .anvil-role-iconbtn button:hover {
+      background:var(--dp-surface-2) !important; color:var(--dp-text) !important; }
+
+    /* ---------- 9. Inputs ---------- */
+    .form-control, select.form-control, textarea.form-control {
+      border-radius:var(--dp-r-sm) !important;
+      border:1px solid var(--dp-input-border) !important;
+      background:var(--dp-surface) !important; color:var(--dp-text) !important;
+      box-shadow:none !important; font-size:var(--dp-fs-body) !important; }
     .form-control:focus { border-color:var(--dp-accent) !important;
-      box-shadow:0 0 0 3px rgba(47,111,208,.15) !important; }
+      box-shadow:0 0 0 3px var(--dp-focus) !important; }
+    .form-control::placeholder { color:var(--dp-faint) !important; }
+    /* the dashboard's parse box should read as the primary input on the page */
+    .anvil-role-bigfield input.form-control {
+      min-width:420px; padding:9px 14px !important; }
+    .anvil-dropdown select.form-control { padding-right:26px !important; }
+    /* checkbox + radio text picks up the theme */
+    .checkbox label, .radio label { color:var(--dp-text); font-size:var(--dp-fs-body); }
 
-    /* Chips: role='chip' — small rounded subject/type tags */
-    .anvil-role-chip { display:inline-block; background:var(--dp-chip-bg);
-      border:1px solid var(--dp-chip-border); border-radius:999px !important;
-      padding:1px 10px !important; margin:0 2px !important; }
-    .anvil-role-chip, .anvil-role-chip * { font-size:11px !important;
-      color:var(--dp-chip-text) !important; font-weight:600 !important; }
+    /* ---------- 10. Chips ---------- */
+    /* Small rounded tags. One base class + a tone suffix; every tone uses a soft
+       tinted fill so it stays quiet in both themes. */
+    .anvil-role-chip, .anvil-role-chip-accent, .anvil-role-chip-overdue,
+    .anvil-role-chip-duetoday, .anvil-role-chip-soon, .anvil-role-chip-distant,
+    .anvil-role-chip-exam, .anvil-role-chip-ok, .anvil-role-chip-warn,
+    .anvil-role-chip-bad {
+      display:inline-block; background:var(--dp-chip-bg);
+      border:1px solid var(--dp-chip-border);
+      border-radius:var(--dp-r-pill) !important;
+      padding:2px 10px !important; margin:0 !important; }
+    .anvil-role-chip .label-text, .anvil-role-chip-accent .label-text,
+    .anvil-role-chip-overdue .label-text, .anvil-role-chip-duetoday .label-text,
+    .anvil-role-chip-soon .label-text, .anvil-role-chip-distant .label-text,
+    .anvil-role-chip-exam .label-text, .anvil-role-chip-ok .label-text,
+    .anvil-role-chip-warn .label-text, .anvil-role-chip-bad .label-text {
+      font-size:var(--dp-fs-micro) !important; font-weight:600 !important;
+      color:var(--dp-chip-text) !important; letter-spacing:.01em; }
 
-    /* Auth card: role='authcard' — centered login panel */
-    .anvil-role-authcard { background:var(--dp-surface);
-      border:1px solid var(--dp-border);
-      border-radius:14px; box-shadow:0 4px 16px var(--dp-shadow-lg);
-      max-width:420px; margin:0 auto !important; padding:36px 32px !important; }
+    .anvil-role-chip-accent   { background:var(--dp-accent-soft);   border-color:transparent; }
+    .anvil-role-chip-overdue  { background:var(--dp-overdue-soft);  border-color:transparent; }
+    .anvil-role-chip-duetoday { background:var(--dp-duetoday-soft); border-color:transparent; }
+    .anvil-role-chip-soon     { background:var(--dp-soon-soft);     border-color:transparent; }
+    .anvil-role-chip-distant  { background:var(--dp-distant-soft);  border-color:transparent; }
+    .anvil-role-chip-exam     { background:var(--dp-exam-soft);     border-color:transparent; }
+    .anvil-role-chip-ok       { background:var(--dp-distant-soft);  border-color:transparent; }
+    .anvil-role-chip-warn     { background:var(--dp-duetoday-soft); border-color:transparent; }
+    .anvil-role-chip-bad      { background:var(--dp-overdue-soft);  border-color:transparent; }
 
-    /* Modals (alert dialogs) follow the theme too */
-    .modal-content { background:var(--dp-surface) !important;
-      color:var(--dp-text) !important; }
+    .anvil-role-chip-accent   .label-text { color:var(--dp-accent) !important; }
+    .anvil-role-chip-overdue  .label-text { color:var(--dp-overdue) !important; }
+    .anvil-role-chip-duetoday .label-text { color:var(--dp-duetoday) !important; }
+    .anvil-role-chip-soon     .label-text { color:var(--dp-soon) !important; }
+    .anvil-role-chip-distant  .label-text { color:var(--dp-distant) !important; }
+    .anvil-role-chip-exam     .label-text { color:var(--dp-exam) !important; }
+    .anvil-role-chip-ok       .label-text { color:var(--dp-ok) !important; }
+    .anvil-role-chip-warn     .label-text { color:var(--dp-warn) !important; }
+    .anvil-role-chip-bad      .label-text { color:var(--dp-bad) !important; }
+
+    /* ---------- 11. Calendar ---------- */
+    /* A FlowPanel renders  .flow-panel > .flow-panel-gutter (flex) >
+       .flow-panel-item(one per child).  Turning the gutter into a 7-column CSS
+       grid gives real, evenly-sized calendar cells — the old GridPanel approach
+       used Bootstrap's 12-column grid, which cannot divide evenly by 7. */
+    .anvil-role-calgrid > .flow-panel-gutter,
+    .anvil-role-calhead > .flow-panel-gutter {
+      display:grid !important; grid-template-columns:repeat(7,1fr);
+      gap:var(--dp-s1); }
+    .anvil-role-calgrid, .anvil-role-calhead { margin:0 !important; }
+    .anvil-role-calgrid > .flow-panel-gutter > .flow-panel-item,
+    .anvil-role-calhead > .flow-panel-gutter > .flow-panel-item {
+      display:block; min-width:0; }
+    .anvil-role-calgrid .anvil-component, .anvil-role-calhead .anvil-component {
+      margin:0 !important; }
+
+    .anvil-role-calhead .label-text {
+      display:block; text-align:center; font-size:var(--dp-fs-micro) !important;
+      font-weight:700 !important; color:var(--dp-faint) !important;
+      text-transform:uppercase; letter-spacing:.06em; padding-bottom:var(--dp-s1); }
+
+    /* one day cell — a Link so the whole square is clickable */
+    .anvil-role-calcell, .anvil-role-calcell-overdue,
+    .anvil-role-calcell-duetoday, .anvil-role-calcell-soon,
+    .anvil-role-calcell-distant, .anvil-role-calcell-blank {
+      display:block !important; width:100%; box-sizing:border-box;
+      min-height:52px; padding:var(--dp-s1) var(--dp-s2) !important;
+      border:1px solid transparent; border-radius:var(--dp-r-sm);
+      text-align:left; text-decoration:none !important;
+      transition:background .12s ease, border-color .12s ease; }
+    .anvil-role-calcell-blank { visibility:hidden; }
+    .anvil-role-calcell:hover, .anvil-role-calcell-overdue:hover,
+    .anvil-role-calcell-duetoday:hover, .anvil-role-calcell-soon:hover,
+    .anvil-role-calcell-distant:hover { border-color:var(--dp-border-strong); }
+    .anvil-role-calcell-overdue  { background:var(--dp-overdue-soft); }
+    .anvil-role-calcell-duetoday { background:var(--dp-duetoday-soft); }
+    .anvil-role-calcell-soon     { background:var(--dp-soon-soft); }
+    .anvil-role-calcell-distant  { background:var(--dp-distant-soft); }
+
+    /* the day number, and its "today" ring */
+    .anvil-role-calnum .label-text, .anvil-role-calnum-now .label-text {
+      font-size:var(--dp-fs-cap) !important; color:var(--dp-text) !important;
+      font-weight:600 !important; }
+    .anvil-role-calnum-now .label-text {
+      display:inline-block; min-width:20px; text-align:center;
+      background:var(--dp-accent); color:#fff !important;
+      border-radius:var(--dp-r-pill); padding:0 5px; }
+    /* count of items on that day (only rendered when > 1) */
+    .anvil-role-calcount .label-text {
+      font-size:var(--dp-fs-micro) !important; color:var(--dp-muted) !important;
+      font-weight:600 !important; }
+    /* VCE exam marker — glyph as well as colour, so it never signals by colour alone */
+    .anvil-role-calexam .label-text {
+      font-size:var(--dp-fs-micro) !important; color:var(--dp-exam) !important;
+      font-weight:700 !important; }
+
+    /* ---------- 12. Subject picker pills ---------- */
+    /* Anvil renders a CheckBox as  div > div.checkbox > label > input + span.
+       Hiding the native box and styling the sibling <span> turns each subject
+       into a toggle pill without needing any JavaScript. */
+    .anvil-role-pickgrid > .flow-panel-gutter {
+      display:flex; flex-wrap:wrap; gap:var(--dp-s2); }
+    .anvil-role-pickgrid { margin:0 0 var(--dp-s4) 0 !important; }
+    .anvil-role-pickgrid .anvil-component { margin:0 !important; }
+
+    .anvil-role-pill .checkbox { margin:0 !important; }
+    .anvil-role-pill input[type=checkbox] {
+      position:absolute !important; opacity:0; width:0; height:0; }
+    .anvil-role-pill label { margin:0 !important; font-weight:400; }
+    .anvil-role-pill label > span {
+      display:inline-block; padding:6px 14px !important;
+      border:1px solid var(--dp-border-strong); border-radius:var(--dp-r-pill);
+      background:var(--dp-surface); color:var(--dp-text);
+      font-size:var(--dp-fs-cap); cursor:pointer; user-select:none;
+      transition:background .12s ease, border-color .12s ease, color .12s ease; }
+    .anvil-role-pill label > span:hover { border-color:var(--dp-accent);
+      color:var(--dp-accent); }
+    .anvil-role-pill input[type=checkbox]:checked + span {
+      background:var(--dp-accent); border-color:var(--dp-accent);
+      color:#fff; font-weight:600; }
+    .anvil-role-pill input[type=checkbox]:focus + span {
+      box-shadow:0 0 0 3px var(--dp-focus); }
+
+    /* ---------- 13. Modals ---------- */
+    .modal-content {
+      background:var(--dp-surface) !important; color:var(--dp-text) !important;
+      border:1px solid var(--dp-border) !important;
+      border-radius:var(--dp-r-lg) !important;
+      box-shadow:0 16px 48px var(--dp-shadow-lg) !important; }
     .modal-content .modal-header, .modal-content .modal-footer {
-      border-color:var(--dp-border) !important; }
+      border-color:var(--dp-border) !important; padding:var(--dp-s4) var(--dp-s5) !important; }
+    .modal-content .modal-body { padding:var(--dp-s4) var(--dp-s5) !important; }
+    .modal-content .modal-title { color:var(--dp-heading) !important;
+      font-weight:700 !important; }
+    .modal-content .close { color:var(--dp-muted) !important; opacity:.8; }
+    .modal-backdrop.in { opacity:.4; }
+    /* Anvil's default modal buttons follow the secondary/primary language */
+    .modal-footer .btn-default {
+      background:var(--dp-btn2-bg) !important; color:var(--dp-btn2-text) !important;
+      border:1px solid var(--dp-input-border) !important;
+      border-radius:var(--dp-r-sm) !important; padding:6px 16px !important; }
+    .modal-footer .btn-default:hover { background:var(--dp-btn2-hover) !important; }
+    .modal-footer .btn-primary, .modal-footer .btn-default:first-child {
+      background:var(--dp-accent) !important; color:#fff !important;
+      border:1px solid var(--dp-accent) !important; }
+    .modal-footer .btn-primary:hover, .modal-footer .btn-default:first-child:hover {
+      background:var(--dp-accent-hover) !important; }
 
-    /* Default label text inside themed containers */
-    body.dotpoint-dark .anvil-label,
-    body.dotpoint-dark .anvil-label * { color:var(--dp-text); }
+    /* ---------- 14. Toasts ---------- */
+    /* Anvil Notifications are bootstrap-notify divs fixed at top:20px, i.e.
+       directly over the top bar — a toast that failed to dismiss used to swallow
+       nav clicks (defect 13). Moving the stack to the bottom-right removes that
+       whole class of problem; common.toast() also caps and times them out. */
+    [data-notify="container"] {
+      top:auto !important; bottom:20px !important;
+      left:auto !important; right:20px !important; margin:0 !important;
+      max-width:340px; border:1px solid var(--dp-border) !important;
+      border-left-width:3px !important;
+      border-radius:var(--dp-r-md) !important;
+      background:var(--dp-surface) !important; color:var(--dp-text) !important;
+      box-shadow:0 8px 28px var(--dp-shadow-lg) !important;
+      padding:var(--dp-s3) var(--dp-s4) !important;
+      font-size:var(--dp-fs-body) !important; }
+    [data-notify="container"].alert-success { border-left-color:var(--dp-ok) !important; }
+    [data-notify="container"].alert-danger  { border-left-color:var(--dp-overdue) !important; }
+    [data-notify="container"].alert-warning { border-left-color:var(--dp-duetoday) !important; }
+    [data-notify="container"].alert-info    { border-left-color:var(--dp-accent) !important; }
+    [data-notify="container"] .close {
+      color:var(--dp-muted) !important; opacity:.7; text-shadow:none !important; }
+
+    /* ---------- 15. Responsive ---------- */
+    /* Anvil's GridPanel emits col-xs-N AND col-sm/md/lg-N for the same number, so
+       Bootstrap's own stacking can never fire. Force the dashboard's three panels
+       to full width on narrow screens instead. */
+    @media (max-width:900px) {
+      .anvil-role-dashgrid .row > [class*="col-"] {
+        width:100% !important; float:none !important; }
+      .anvil-role-panel { padding:0 !important; }
+      .anvil-role-bigfield input.form-control { min-width:0; width:100%; }
+      .anvil-role-page { padding:0 var(--dp-s3) var(--dp-s6) var(--dp-s3) !important; }
+      .anvil-role-topbar { padding:0 var(--dp-s3) !important; }
+      .anvil-role-navitem, .anvil-role-navitem-active { padding:12px var(--dp-s2) !important; }
+      [data-notify="container"] { left:12px !important; right:12px !important;
+        max-width:none; bottom:12px !important; }
+    }
+    @media (max-width:560px) {
+      .anvil-role-calcell, .anvil-role-calcell-overdue,
+      .anvil-role-calcell-duetoday, .anvil-role-calcell-soon,
+      .anvil-role-calcell-distant { min-height:40px; padding:2px 4px !important; }
+      .anvil-role-authcard { padding:var(--dp-s5) var(--dp-s4) !important; }
+    }
     </style>
 package_name: DotPoint
 runtime_options:

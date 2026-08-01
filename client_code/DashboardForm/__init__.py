@@ -4,38 +4,53 @@ from anvil.tables import app_tables
 """DashboardForm - the all-in-view dashboard (FR06, FR07, FR08, FR09, FR21).
 
 Three panels populated by a single get_dashboard_data() round-trip (NFR01):
-  - assessment list (filtered/sorted) with urgency colour + days-remaining,
-  - month calendar grid with per-day urgency colour + a month navigator,
-  - "upcoming" 30-day sidebar.
-Plus the NLP input bar (parse -> preview -> save), Bulk add, a filter row
-(subject / status / type / show-completed), a sort control (FR07), a
-school-terms hint banner (FR15 discoverability), inline card status changes
-(EC-UX-05), and clickable calendar days that pop up that day's assessments.
+  - assessment list (filtered/sorted) with an urgency-coloured edge and
+    days-remaining,
+  - a month calendar grid with per-day urgency tints and VCE exam markers,
+  - an "upcoming" 30-day sidebar.
 
-See IMPLEMENTATION_SPEC.md section 3 (DashboardForm).
+Reading order down the page is deliberate (spec §14): the natural-language
+input bar is the hero, because typing a sentence is the app's whole premise;
+then the filters that scope what follows; then any banner the student needs to
+act on (school terms unset / next exam); then the three panels.
+
+The calendar is a single FlowPanel with role='calgrid'. The stylesheet turns
+its inner gutter into a 7-column CSS grid, so 42 day cells laid out in one flat
+list wrap into weeks by themselves. The previous implementation used a
+Bootstrap GridPanel per week, which cannot divide 12 columns evenly by 7 and so
+rendered visibly crooked.
+
+See IMPLEMENTATION_SPEC.md section 3 (DashboardForm) and section 14.
 """
 
 import anvil
 import anvil.server
+import datetime
 from anvil import (
     ColumnPanel, FlowPanel, GridPanel, Label, Link, TextBox, Button, CheckBox,
-    DropDown, Notification, Spacer, alert, confirm,
+    DropDown, Spacer, alert, confirm,
 )
 
-from ..common import make_top_bar
+from ..common import (
+    make_top_bar, make_page, make_row, make_toolbar, make_list_card,
+    make_banner, make_section_header, make_chip, make_band_chip,
+    make_empty_state, band_role, navigate, toast_error,
+)
 
-# Mirror of _constants.URGENCY_COLOURS (client cannot import server modules).
-_URGENCY_COLOURS = {
-    'overdue': '#d64550', 'today': '#e8833a', 'soon': '#3b7dd8', 'distant': '#9aa0a6',
-}
+# Mirrors of the server enums (the client cannot import server modules; keep in
+# sync — test_constants.py asserts these still match _constants.py).
 _TYPES = (('SAC', 'sac'), ('SAT', 'sat'), ('Exam', 'exam'),
           ('Project', 'project'), ('Homework', 'homework'), ('Other', 'other'))
 _STATUSES = (('Not started', 'not_started'), ('In progress', 'in_progress'),
              ('Completed', 'completed'))
 _TYPE_LABELS = dict((v, k) for k, v in _TYPES)
-_STATUS_LABELS = dict((v, k) for k, v in _STATUSES)
-_SORTS = (('Due date', 'due_date'), ('Weight', 'weight'), ('Subject', 'subject'))
-_CONF_COLOUR = {'HIGH': '#2e7d32', 'MEDIUM': '#e8833a', 'LOW': '#d64550'}
+_SORTS =(('Sort: due date', 'due_date'), ('Sort: weight', 'weight'),
+          ('Sort: subject', 'subject'))
+
+# Parser confidence -> chip tone. The colours themselves live in the
+# stylesheet, so these are role suffixes, not hex values.
+_CONF_TONE = {'HIGH': 'ok', 'MEDIUM': 'warn', 'LOW': 'bad'}
+
 _WEEKDAY_HEADERS = ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')
 _MONTH_NAMES = ('', 'January', 'February', 'March', 'April', 'May', 'June',
                 'July', 'August', 'September', 'October', 'November', 'December')
@@ -50,6 +65,16 @@ def _cell(dct, day):
     return dct.get(str(day))
 
 
+def _from_iso(s):
+    """'YYYY-MM-DD' -> date, or None (manual; avoids Skulpt isoformat quirks)."""
+    if not s or not isinstance(s, str) or len(s) < 10:
+        return None
+    try:
+        return datetime.date(int(s[0:4]), int(s[5:7]), int(s[8:10]))
+    except (ValueError, TypeError):
+        return None
+
+
 class DashboardForm(ColumnPanel):
     def __init__(self, **properties):
         super().__init__(**properties)
@@ -57,65 +82,60 @@ class DashboardForm(ColumnPanel):
         self.spacing_below = 'none'
 
         self._current_month = None   # 'YYYY-MM'; None -> server uses today's month
+        self._today = None           # date, from the server payload
+        self._day_buckets = {}
+        self._exam_days = {}
 
-        self.add_component(make_top_bar())
-        body = ColumnPanel()
+        self.add_component(make_top_bar(active='dashboard'))
+        body = make_page()
         self.add_component(body)
 
-        # --- NLP input bar ---
-        bar = FlowPanel()
+        # --- the hero: type a sentence, get an assessment (FR01/FR02) ---
         self._nlp_tb = TextBox(
-            placeholder='Type an assessment, e.g. "Methods SAC2 due Friday week 5 worth 25%"')
+            placeholder='Type an assessment, e.g. "Methods SAC2 due Friday week 5 worth 25%"',
+            role='bigfield')
         self._nlp_tb.set_event_handler('pressed_enter', self._on_parse_click)
-        bar.add_component(self._nlp_tb)
         parse_btn = Button(text='Parse', role='primary')
         parse_btn.set_event_handler('click', self._on_parse_click)
-        bar.add_component(parse_btn)
-        add_btn = Button(text='+ Add manually', role='secondary')
+        add_btn = Button(text='Add manually', role='secondary')
         add_btn.set_event_handler('click', self._on_add_click)
-        bar.add_component(add_btn)
         bulk_btn = Button(text='Bulk add', role='secondary')
         bulk_btn.set_event_handler('click', self._on_bulk_click)
-        bar.add_component(bulk_btn)
-        body.add_component(bar)
+        body.add_component(make_toolbar(self._nlp_tb, parse_btn, add_btn, bulk_btn))
 
-        # --- filter row ---
-        filters = FlowPanel()
-        filters.add_component(Label(text='Filter:'))
-        self._subject_dd = DropDown(items=['All'])
+        # --- filters (FR07) ---
+        # No "Filter:" / "Sort:" captions: each control names itself, which is
+        # two fewer words on screen.
+        self._subject_dd = DropDown(items=[('All subjects', 'All')])
         self._subject_dd.set_event_handler('change', self._on_filter_change)
-        filters.add_component(self._subject_dd)
         self._status_dd = DropDown(items=[('All status', '')] + list(_STATUSES))
         self._status_dd.set_event_handler('change', self._on_filter_change)
-        filters.add_component(self._status_dd)
         self._type_dd = DropDown(items=[('All types', '')] + list(_TYPES))
         self._type_dd.set_event_handler('change', self._on_filter_change)
-        filters.add_component(self._type_dd)
-        self._show_completed_cb = CheckBox(text='Show completed')
+        self._show_completed_cb = CheckBox(text='Show completed', role='pill')
         self._show_completed_cb.set_event_handler('change', self._on_filter_change)
-        filters.add_component(self._show_completed_cb)
-        filters.add_component(Label(text='Sort:'))
         self._sort_dd = DropDown(items=list(_SORTS))
         self._sort_dd.selected_value = 'due_date'
         self._sort_dd.set_event_handler('change', self._on_filter_change)
-        filters.add_component(self._sort_dd)
-        body.add_component(filters)
+        body.add_component(make_toolbar(
+            self._subject_dd, self._status_dd, self._type_dd,
+            self._show_completed_cb, self._sort_dd))
 
-        # Hint banner slot (shown while school terms are unconfigured, FR15).
-        self._hint_panel = ColumnPanel()
+        # Banner slots: filled only when there is something to say.
+        self._hint_panel = ColumnPanel(role='row')
         body.add_component(self._hint_panel)
-
-        # Next-exam countdown chip slot (spec §13).
-        self._exam_chip_panel = ColumnPanel()
+        self._exam_chip_panel = ColumnPanel(role='row')
         body.add_component(self._exam_chip_panel)
 
         body.add_component(Spacer(height=8))
 
         # --- three-panel body (list | calendar | upcoming) ---
-        grid = GridPanel()
-        self._list_panel = ColumnPanel()
-        self._calendar_panel = ColumnPanel()
-        self._upcoming_panel = ColumnPanel()
+        # role='dashgrid' is what the stylesheet's media query targets to stack
+        # these three columns on a narrow screen.
+        grid = GridPanel(role='dashgrid')
+        self._list_panel = ColumnPanel(role='panel')
+        self._calendar_panel = ColumnPanel(role='panel')
+        self._upcoming_panel = ColumnPanel(role='panel')
         grid.add_component(self._list_panel, row='main', col_xs=0, width_xs=5)
         grid.add_component(self._calendar_panel, row='main', col_xs=5, width_xs=4)
         grid.add_component(self._upcoming_panel, row='main', col_xs=9, width_xs=3)
@@ -145,9 +165,12 @@ class DashboardForm(ColumnPanel):
                                      sort={'by': self._sort_dd.selected_value or 'due_date'})
         except Exception as e:
             self._list_panel.clear()
-            self._list_panel.add_component(
-                Label(text="Couldn't load dashboard: %s" % e, foreground='#d64550'))
+            self._list_panel.add_component(make_empty_state(
+                "Couldn't load your dashboard",
+                'Check your connection and try again. (%s)' % e,
+                'Retry', self._refresh))
             return
+        self._today = _from_iso(data.get('today'))
         self._populate_subjects(data.get('subjects', []))
         self._render_hint(data.get('settings', {}))
         self._render_exam_chip(data.get('next_exam'))
@@ -160,18 +183,13 @@ class DashboardForm(ColumnPanel):
         self._hint_panel.clear()
         if settings.get('school_terms'):
             return
-        hint = FlowPanel(role='card')
-        hint.add_component(Label(text='Tip:', bold=True, foreground='#2f6fd0'))
-        hint.add_component(Label(
-            text='set your school terms in Settings so dates like "term 3 week 5" resolve automatically.'))
-        go = Link(text='Open Settings', foreground='#2f6fd0')
-        go.set_event_handler('click', lambda **e: self._go_settings())
-        hint.add_component(go)
-        self._hint_panel.add_component(hint)
-
-    def _go_settings(self):
-        from ..common import _navigate
-        _navigate('settings')
+        go = Link(text='Open Settings', role='t-accent')
+        go.set_event_handler('click', lambda **e: navigate('settings'))
+        self._hint_panel.add_component(make_banner(
+            make_chip('Tip', 'accent'),
+            Label(text='Set your school terms so dates like "term 3 week 5" resolve '
+                       'automatically.', role='caption'),
+            go))
 
     def _render_exam_chip(self, next_exam):
         """Countdown chip for the next VCE written exam (spec §13)."""
@@ -179,82 +197,80 @@ class DashboardForm(ColumnPanel):
         if not next_exam:
             return
         days = next_exam.get('days_remaining')
-        chip = FlowPanel(role='card')
-        chip.add_component(Label(text='▲', foreground='#7c3aed', bold=True))
-        chip.add_component(Label(
-            text='Next exam: %s (%s)' % (next_exam.get('subject'),
-                                         next_exam.get('paper')), bold=True))
         if days == 0:
-            when = 'TODAY'
+            when = 'today'
         elif days == 1:
             when = 'tomorrow'
         else:
             when = 'in %d days' % days
-        chip.add_component(Label(text=when, bold=True, foreground='#7c3aed'))
-        go = Link(text='Exam timetable', foreground='#2f6fd0')
-        go.set_event_handler('click', lambda **e: self._go_exams())
-        chip.add_component(go)
-        self._exam_chip_panel.add_component(chip)
-
-    def _go_exams(self):
-        from ..common import _navigate
-        _navigate('exams')
+        go = Link(text='Exam timetable', role='t-accent')
+        go.set_event_handler('click', lambda **e: navigate('exams'))
+        self._exam_chip_panel.add_component(make_banner(
+            make_chip('Next exam', 'exam'),
+            Label(text='%s — %s' % (next_exam.get('subject'), next_exam.get('paper')),
+                  role='cardtitle'),
+            make_chip(when, 'exam'),
+            go))
 
     def _populate_subjects(self, subjects):
+        """Rebuild the subject filter, preserving the current choice."""
         current = self._subject_dd.selected_value
-        items = ['All'] + list(subjects)
+        items = [('All subjects', 'All')] + [(s, s) for s in subjects]
+        values = [v for _, v in items]
         self._subject_dd.items = items
-        self._subject_dd.selected_value = current if current in items else 'All'
+        self._subject_dd.selected_value = current if current in values else 'All'
 
     # --- list panel --------------------------------------------------------
     def _render_list(self, rows):
         self._list_panel.clear()
-        self._list_panel.add_component(Label(text='Your assessments', font_size=18, bold=True))
+        count = '%d shown' % len(rows) if rows else None
+        self._list_panel.add_component(
+            make_section_header('Your assessments', count))
         if not rows:
-            self._list_panel.add_component(
-                Label(text='No assessments match — parse a sentence or add one manually.',
-                      foreground='#9aa0a6', italic=True))
+            self._list_panel.add_component(make_empty_state(
+                'Nothing here yet',
+                'Type an assessment above and press Parse, or add one manually.',
+                'Add manually', self._on_add_click))
             return
         for a in rows:
             self._list_panel.add_component(self._make_card(a))
 
     def _make_card(self, a):
-        card = ColumnPanel(spacing_above='small', spacing_below='small', role='card')
+        """One assessment row. The card's left edge carries the urgency band, so
+        the list scans by colour without a decorative dot on every line."""
         band = a.get('urgency_band', 'distant')
+        card = make_list_card(band)
 
-        # Row 1: urgency dot, title, subject/type chips, parser confidence badge.
-        top = FlowPanel()
-        top.add_component(Label(text='●', foreground=_URGENCY_COLOURS.get(band, '#9aa0a6'),
-                                bold=True))
-        top.add_component(Label(text=a.get('title') or '(untitled)', bold=True, font_size=15))
+        # Row 1: title, then the tags that identify it.
+        top = make_row(Label(text=a.get('title') or '(untitled)', role='cardtitle'))
         if a.get('subject'):
-            top.add_component(Label(text=a['subject'], role='chip'))
+            top.add_component(make_chip(a['subject']))
         type_label = _TYPE_LABELS.get(a.get('type'), a.get('type') or '')
         if type_label:
-            top.add_component(Label(text=type_label, role='chip'))
+            top.add_component(make_chip(type_label))
         conf = a.get('confidence')
         if conf:
-            top.add_component(Label(text='parsed · %s' % conf, font_size=10, italic=True,
-                                    foreground=_CONF_COLOUR.get(conf, '#9aa0a6')))
+            # FR17 audit trail: this row came from the parser, at this confidence.
+            top.add_component(make_chip('parsed · %s' % conf,
+                                        _CONF_TONE.get(conf, 'distant')))
         card.add_component(top)
 
-        # Row 2: due text, weight, inline status dropdown (EC-UX-05), actions.
-        bottom = FlowPanel()
-        bottom.add_component(Label(text=self._due_text(a),
-                                   foreground=_URGENCY_COLOURS.get(band, '#9aa0a6')))
+        # Row 2: when it's due, how much it's worth, and the actions.
+        bottom = make_row(Label(text=self._due_text(a),
+                                role=band_role(band, 't')))
         if a.get('weight') is not None:
-            bottom.add_component(Label(text='· %g%% of grade' % a.get('weight'),
-                                       foreground='#9aa0a6'))
+            bottom.add_component(Label(text='%g%% of grade' % a.get('weight'),
+                                       role='caption'))
         status_dd = DropDown(items=list(_STATUSES))
         status_dd.selected_value = a.get('status') or 'not_started'
         status_dd.set_event_handler(
             'change', lambda aid=a['id'], dd=status_dd, **e:
             self._on_card_status_change(aid, dd.selected_value))
         bottom.add_component(status_dd)
-        edit_btn = Button(text='Edit', role='secondary')
+        edit_btn = Button(text='Edit', role='ghost')
         edit_btn.set_event_handler('click', lambda aid=a['id'], **e: self._on_edit_click(aid))
         bottom.add_component(edit_btn)
-        del_btn = Button(text='Delete', role='secondary')
+        del_btn = Button(text='Delete', role='danger')
         del_btn.set_event_handler('click', lambda aid=a['id'], **e: self._on_delete_click(aid))
         bottom.add_component(del_btn)
         card.add_component(bottom)
@@ -267,7 +283,7 @@ class DashboardForm(ColumnPanel):
         try:
             anvil.server.call('update_assessment', assessment_id, {'status': new_status})
         except Exception as e:
-            Notification("Couldn't update status: %s" % e, style='danger', timeout=4).show()
+            toast_error("Couldn't update status: %s" % e)
         self._refresh()
 
     def _due_text(self, a):
@@ -276,10 +292,10 @@ class DashboardForm(ColumnPanel):
         if days is None:
             return due
         if days < 0:
-            return '%s (%d day%s overdue)' % (due, -days, 's' if days != -1 else '')
+            return '%s · %d day%s overdue' % (due, -days, '' if days == -1 else 's')
         if days == 0:
-            return '%s (today)' % due
-        return '%s (in %d day%s)' % (due, days, 's' if days != 1 else '')
+            return '%s · today' % due
+        return '%s · in %d day%s' % (due, days, '' if days == 1 else 's')
 
     # --- calendar panel ----------------------------------------------------
     def _render_calendar(self, cal):
@@ -290,74 +306,77 @@ class DashboardForm(ColumnPanel):
         colours = cal.get('cell_colours') or {}
         self._day_buckets = cal.get('day_buckets') or {}
         self._exam_days = cal.get('exam_days') or {}
-
-        nav = FlowPanel()
-        prev_btn = Button(text='◀', role='secondary')
-        prev_btn.set_event_handler('click', lambda **e: self._change_month(-1))
-        nav.add_component(prev_btn)
-        label = '%s %s' % (_MONTH_NAMES[month] if month else '', year or '')
-        nav.add_component(Label(text=label.strip(), bold=True))
-        next_btn = Button(text='▶', role='secondary')
-        next_btn.set_event_handler('click', lambda **e: self._change_month(1))
-        nav.add_component(next_btn)
-        self._calendar_panel.add_component(nav)
         # Remember the displayed month for prev/next arithmetic.
         self._displayed_year, self._displayed_month = year, month
 
-        header = GridPanel()
-        for i, name in enumerate(_WEEKDAY_HEADERS):
-            header.add_component(Label(text=name, bold=True, font_size=11),
-                                 row='h', col_xs=i * 12 // 7, width_xs=12 // 7 or 1)
+        prev_btn = Button(text='‹', role='iconbtn')
+        prev_btn.set_event_handler('click', lambda **e: self._change_month(-1))
+        next_btn = Button(text='›', role='iconbtn')
+        next_btn.set_event_handler('click', lambda **e: self._change_month(1))
+        label = '%s %s' % (_MONTH_NAMES[month] if month else '', year or '')
+        self._calendar_panel.add_component(make_section_header('Calendar'))
+        self._calendar_panel.add_component(make_row(
+            prev_btn, Label(text=label.strip(), role='cardtitle'), next_btn))
+
+        header = FlowPanel(role='calhead')
+        for name in _WEEKDAY_HEADERS:
+            header.add_component(Label(text=name))
         self._calendar_panel.add_component(header)
 
-        for w, week in enumerate(weeks):
-            row = GridPanel()
-            for i, day in enumerate(week):
-                col = i * 12 // 7
-                if day == 0:
-                    cell = Label(text=' ')
-                else:
-                    band = _cell(colours, day)
-                    has_exam = bool(_cell(self._exam_days, day))
-                    if band or has_exam:
-                        # Coloured bold day number (white-on-background renders
-                        # unreliably in this theme). Clickable: opens the day's
-                        # assessments/exams popup. '▲' marks a VCE exam day
-                        # (spec §13); exam-only days show purple.
-                        text = ('● %d' % day) if band else str(day)
-                        if has_exam:
-                            text += ' ▲'
-                        colour = (_URGENCY_COLOURS.get(band, '#9aa0a6')
-                                  if band else '#7c3aed')
-                        cell = Link(text=text, bold=True, foreground=colour)
-                        cell.set_event_handler(
-                            'click', lambda d=day, **e: self._on_day_click(d))
-                    else:
-                        cell = Label(text=str(day), foreground='#9aa0a6')
-                row.add_component(cell, row='w%d' % w, col_xs=col, width_xs=12 // 7 or 1)
-            self._calendar_panel.add_component(row)
+        # One flat list of cells; the CSS grid wraps them into weeks.
+        grid = FlowPanel(role='calgrid')
+        for week in weeks:
+            for day in week:
+                grid.add_component(self._make_day_cell(day, colours, year, month))
+        self._calendar_panel.add_component(grid)
+
+    def _make_day_cell(self, day, colours, year, month):
+        """One calendar square. Days outside the month are invisible spacers."""
+        if day == 0:
+            return Label(text=' ', role='calcell-blank')
+
+        band = _cell(colours, day)
+        items = _cell(self._day_buckets, day) or []
+        exams = _cell(self._exam_days, day) or []
+
+        role = band_role(band, 'calcell') if band else 'calcell'
+        cell = Link(role=role)
+        cell.set_event_handler('click', lambda d=day, **e: self._on_day_click(d))
+
+        is_today = (self._today is not None and year == self._today.year
+                    and month == self._today.month and day == self._today.day)
+        cell.add_component(Label(text=str(day),
+                                 role='calnum-now' if is_today else 'calnum'))
+        if len(items) > 1:
+            cell.add_component(Label(text='%d due' % len(items), role='calcount'))
+        if exams:
+            # Glyph as well as colour, so an exam day never signals by colour alone.
+            cell.add_component(Label(text='▲ exam', role='calexam'))
+        return cell
 
     def _on_day_click(self, day):
         """Show the clicked calendar day's assessments and VCE exams."""
-        items = _cell(getattr(self, '_day_buckets', {}), day) or []
-        exams = _cell(getattr(self, '_exam_days', {}), day) or []
+        items = _cell(self._day_buckets, day) or []
+        exams = _cell(self._exam_days, day) or []
         panel = ColumnPanel()
         if not items and not exams:
-            panel.add_component(Label(text='Nothing due this day.'))
+            panel.add_component(make_empty_state('Nothing due this day'))
         for label in exams:
-            row = FlowPanel()
-            row.add_component(Label(text='▲', foreground='#7c3aed', bold=True))
-            row.add_component(Label(text='VCE exam: %s' % label, bold=True,
-                                    foreground='#7c3aed'))
+            row = make_list_card()
+            row.add_component(make_row(make_chip('VCE exam', 'exam'),
+                                       Label(text=label, role='cardtitle')))
             panel.add_component(row)
         for a in items:
-            row = FlowPanel()
             band = a.get('urgency_band', 'distant')
-            row.add_component(Label(text='●', foreground=_URGENCY_COLOURS.get(band, '#9aa0a6')))
-            row.add_component(Label(text=a.get('title') or '(untitled)', bold=True))
-            row.add_component(Label(text='%s · %s' % (
-                a.get('subject') or '', _TYPE_LABELS.get(a.get('type'), '')),
-                foreground='#9aa0a6'))
+            row = make_list_card(band)
+            detail = make_row(Label(text=a.get('title') or '(untitled)',
+                                    role='cardtitle'))
+            if a.get('subject'):
+                detail.add_component(make_chip(a['subject']))
+            type_label = _TYPE_LABELS.get(a.get('type'), '')
+            if type_label:
+                detail.add_component(make_chip(type_label))
+            row.add_component(detail)
             panel.add_component(row)
         title = (items[0].get('due_display') if items else '') or 'This day'
         alert(panel, title=title, large=False, buttons=[('Close', None)])
@@ -380,18 +399,17 @@ class DashboardForm(ColumnPanel):
     # --- upcoming panel ----------------------------------------------------
     def _render_upcoming(self, upcoming):
         self._upcoming_panel.clear()
-        self._upcoming_panel.add_component(Label(text='Upcoming (30 days)', font_size=16, bold=True))
+        self._upcoming_panel.add_component(make_section_header('Next 30 days'))
         if not upcoming:
-            self._upcoming_panel.add_component(
-                Label(text='Nothing due in the next 30 days.', foreground='#9aa0a6', italic=True))
+            self._upcoming_panel.add_component(make_empty_state(
+                'All clear',
+                'Nothing is due in the next 30 days.'))
             return
         for a in upcoming:
-            row = FlowPanel()
             band = a.get('urgency_band', 'distant')
-            row.add_component(Label(text=' ', background=_URGENCY_COLOURS.get(band, '#9aa0a6')))
-            row.add_component(Label(text=a.get('due_display') or '', font_size=11, bold=True))
-            row.add_component(Label(text=a.get('title') or '(untitled)', font_size=12))
-            self._upcoming_panel.add_component(row)
+            self._upcoming_panel.add_component(make_row(
+                make_band_chip(a.get('due_display') or '', band),
+                Label(text=a.get('title') or '(untitled)', role='caption')))
 
     # --- handlers ----------------------------------------------------------
     def _on_filter_change(self, **event_args):
@@ -400,12 +418,12 @@ class DashboardForm(ColumnPanel):
     def _on_parse_click(self, **event_args):
         text = (self._nlp_tb.text or '').strip()
         if not text:
-            Notification("Type an assessment first.", style='warning', timeout=4).show()
+            toast_error("Type an assessment first.")
             return
         try:
             parsed = anvil.server.call('parse_text', text)
         except Exception as e:
-            Notification("Couldn't parse: %s" % e, style='danger', timeout=4).show()
+            toast_error("Couldn't parse: %s" % e)
             return
         from ..AssessmentEditorForm import AssessmentEditorForm
         result = alert(AssessmentEditorForm(mode='preview', prefill=parsed),
@@ -439,6 +457,6 @@ class DashboardForm(ColumnPanel):
         try:
             anvil.server.call('delete_assessment', assessment_id)
         except Exception as e:
-            Notification("Couldn't delete: %s" % e, style='danger', timeout=4).show()
+            toast_error("Couldn't delete: %s" % e)
             return
         self._refresh()

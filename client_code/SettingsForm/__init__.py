@@ -4,6 +4,14 @@ from anvil.tables import app_tables
 """SettingsForm - per-user preferences (reminders, school year/terms, timezone,
 theme, and the deliberate change-subjects flow).
 
+Layout (spec §14): a page title, then one card per decision the student makes -
+Reminders, School terms, Timezone & theme, My subjects - and a single Save at the
+bottom. Grouping matters here because Settings is the one screen with unrelated
+controls on it: cards give each group a visible boundary, so the student can find
+"the term dates" without reading the whole page. Nothing on this form styles
+itself; every colour and size comes from a role the stylesheet paints, which is
+what lets the same markup work in the light and dark themes.
+
 Resolves Pending Decision 2 (timezone) end-to-end: the timezone dropdown writes
 user_settings.timezone, which drives all server-side "today" / date-math.
 
@@ -23,12 +31,14 @@ import anvil
 import anvil.server
 import datetime
 from anvil import (
-    ColumnPanel, FlowPanel, Label, CheckBox, DatePicker, TextBox, DropDown,
-    Button, Link, Notification, alert, confirm,
+    ColumnPanel, Label, CheckBox, DatePicker, TextBox, DropDown,
+    Button, Link, alert, confirm,
 )
 
 from ..common import (
-    make_top_bar, SubjectPicker, apply_theme, set_session_settings,
+    make_top_bar, make_page, make_page_title, make_section_header, make_card,
+    make_row, make_field, make_chip, make_empty_state, toast, toast_error,
+    SubjectPicker, apply_theme, set_session_settings,
 )
 
 # Mirrors _constants.ENGLISH_GROUP / MATHS_GROUP (client can't import server
@@ -77,88 +87,147 @@ def _from_iso(s):
 
 
 class SettingsForm(ColumnPanel):
+    """The settings page: top bar, four cards, one Save.
+
+    Each card is built by its own _build_* method. Splitting the constructor up
+    this way keeps every control next to the comment that justifies it, and means
+    the page order can be changed in one place (__init__) without touching the
+    controls themselves. The _build_* methods also stash the widgets they create
+    on self, because _load_settings and _on_save_click read them all back.
+    """
+
     def __init__(self, **properties):
         super().__init__(**properties)
         self.spacing_above = 'none'
         self.spacing_below = 'none'
 
-        self.add_component(make_top_bar())
+        self.add_component(make_top_bar(active='settings'))
 
-        body = ColumnPanel()
+        body = make_page()
         self.add_component(body)
+        body.add_component(make_page_title(
+            'Settings',
+            'Reminders, term dates, timezone and the subjects DotPoint works from.'))
 
-        # --- Reminders ---
-        body.add_component(Label(text='Reminders', role='heading'))
-        body.add_component(Label(text='Default reminder days before an assessment is due:'))
-        self._day_checks = {}
-        days_row = FlowPanel()
-        for d in REMINDER_DAY_OPTIONS:
-            cb = CheckBox(text='%d days' % d)
-            self._day_checks[d] = cb
-            days_row.add_component(cb)
-        body.add_component(days_row)
+        body.add_component(self._build_reminders_card())
+        body.add_component(self._build_terms_card())
+        body.add_component(self._build_display_card())
+        body.add_component(self._build_subjects_card())
 
-        self._notifications_cb = CheckBox(text='Enable email reminders')
-        body.add_component(self._notifications_cb)
-
-        # --- School terms ---
-        body.add_component(Label(text='School terms', role='heading'))
-        self._term_pickers = []  # [(start_DatePicker, end_DatePicker), ...]
-        for term in range(1, _NUM_TERMS + 1):
-            row = FlowPanel()
-            row.add_component(Label(text='Term %d' % term))
-            start_dp = DatePicker(placeholder='Start')
-            end_dp = DatePicker(placeholder='End')
-            row.add_component(start_dp)
-            row.add_component(end_dp)
-            body.add_component(row)
-            self._term_pickers.append((start_dp, end_dp))
-
-        preset = Link(text='Load VIC 2026 term dates', foreground='#2f6fd0')
-        preset.set_event_handler('click', self._on_load_preset)
-        body.add_component(preset)
-
-        year_row = FlowPanel()
-        year_row.add_component(Label(text='School year'))
-        self._school_year_tb = TextBox(placeholder='e.g. 2026')
-        year_row.add_component(self._school_year_tb)
-        body.add_component(year_row)
-
-        # --- Timezone ---
-        body.add_component(Label(text='Timezone', role='heading'))
-        self._timezone_dd = DropDown(items=list(TIMEZONES))
-        body.add_component(self._timezone_dd)
-
-        # --- Theme (spec §12) ---
-        body.add_component(Label(text='Theme', role='heading'))
-        self._theme_dd = DropDown(items=[('Light', 'light'), ('Dark', 'dark')])
-        body.add_component(self._theme_dd)
-
-        # --- Subjects (spec §11: locked; deliberate change flow only) ---
-        body.add_component(Label(text='My subjects', role='heading'))
-        self._subjects_row = FlowPanel()
-        body.add_component(self._subjects_row)
-        body.add_component(Label(
-            text='Subjects are locked in — they drive the parser, dashboard '
-                 'and exam timetable.',
-            font_size=12, italic=True, foreground='#9aa0a6'))
-        change_btn = Button(text='Change subjects…', role='secondary')
-        change_btn.set_event_handler('click', self._on_change_subjects)
-        body.add_component(change_btn)
-
-        # --- Save ---
+        # One Save for the whole page. It sits after the last card, on its own
+        # row, so it reads as the commit action for everything above it — the
+        # subject change is the one setting that saves itself, because it needs
+        # its own confirmation.
         save_btn = Button(text='Save', role='primary')
         save_btn.set_event_handler('click', self._on_save_click)
-        body.add_component(save_btn)
+        body.add_component(make_row(save_btn))
 
         self._subjects = []
         self._load_settings()
+
+    # --- card builders -------------------------------------------------------
+
+    def _build_reminders_card(self):
+        """Reminders: the N-days-before choices, plus the email master switch.
+
+        The days are a small fixed set the student may pick any number of, so
+        they are rendered as pills (role='pill' restyles a CheckBox as a toggle):
+        all five options and the current answer read in a single line, where a
+        stacked column of tick boxes was the tallest thing on the page.
+        """
+        card = make_card()
+        card.add_component(make_section_header(
+            'Reminders', 'How far ahead of a due date to be reminded'))
+
+        self._day_checks = {}
+        days_row = make_row()
+        for d in REMINDER_DAY_OPTIONS:
+            cb = CheckBox(text='%d days' % d, role='pill')
+            self._day_checks[d] = cb
+            days_row.add_component(cb)
+        card.add_component(days_row)
+
+        self._notifications_cb = CheckBox(text='Enable email reminders')
+        card.add_component(self._notifications_cb)
+        return card
+
+    def _build_terms_card(self):
+        """School terms, and the year those terms belong to.
+
+        Each term is one make_row(label, start, end), so the four rows form a
+        column of aligned Start/End pairs instead of four differently-indented
+        lines. The school year sits in this card rather than with the display
+        settings because the preset link fills in both at once — a value silently
+        changing in a card the student is not looking at reads as a bug.
+        """
+        card = make_card()
+        card.add_component(make_section_header(
+            'School terms', 'Lets the parser resolve "term 2 week 3" dates'))
+
+        self._term_pickers = []  # [(start_DatePicker, end_DatePicker), ...]
+        for term in range(1, _NUM_TERMS + 1):
+            start_dp = DatePicker(placeholder='Start')
+            end_dp = DatePicker(placeholder='End')
+            card.add_component(make_row(
+                Label(text='Term %d' % term, role='caption'), start_dp, end_dp))
+            self._term_pickers.append((start_dp, end_dp))
+
+        preset = Link(text='Load VIC 2026 term dates', role='t-accent')
+        preset.set_event_handler('click', self._on_load_preset)
+        card.add_component(make_row(preset))
+
+        self._school_year_tb = TextBox(placeholder='e.g. 2026')
+        card.add_component(make_field('School year', self._school_year_tb))
+        return card
+
+    def _build_display_card(self):
+        """Timezone (spec Decision 2) and theme (spec §12).
+
+        Both answer "how should DotPoint present itself to me", so they share a
+        card; neither needs an explanation longer than one line.
+        """
+        card = make_card()
+        card.add_component(make_section_header('Timezone & theme'))
+
+        self._timezone_dd = DropDown(items=list(TIMEZONES))
+        card.add_component(make_field(
+            'Timezone', self._timezone_dd,
+            'Every "due today" and countdown is worked out in this zone.'))
+
+        self._theme_dd = DropDown(items=[('Light', 'light'), ('Dark', 'dark')])
+        card.add_component(make_field('Theme', self._theme_dd))
+        return card
+
+    def _build_subjects_card(self):
+        """The locked-in subjects (spec §11).
+
+        Read-only chips plus one deliberate way out. The chips live in their own
+        panel so _render_subject_chips can clear and redraw just that panel after
+        a successful change, without rebuilding the card around it.
+        """
+        card = make_card()
+        card.add_component(make_section_header('My subjects'))
+
+        self._subjects_panel = ColumnPanel()
+        card.add_component(self._subjects_panel)
+
+        card.add_component(Label(
+            text='Subjects drive the parser, the dashboard filter and the exam '
+                 'timetable.',
+            role='micro'))
+
+        change_btn = Button(text='Change subjects…', role='secondary')
+        change_btn.set_event_handler('click', self._on_change_subjects)
+        card.add_component(make_row(change_btn))
+        return card
+
+    # --- data ----------------------------------------------------------------
 
     def _load_settings(self):
         try:
             s = anvil.server.call('get_settings')
         except Exception as e:
-            Notification("Couldn't load settings: %s" % e, style='danger', timeout=4).show()
+            toast_error("Couldn't load settings: %s" % e)
             return
         # Heal the per-session cache with this fresh copy (e.g. after an
         # import changed settings server-side).
@@ -195,14 +264,25 @@ class SettingsForm(ColumnPanel):
         self._render_subject_chips()
 
     def _render_subject_chips(self):
-        self._subjects_row.clear()
+        """Redraw the subject chips from self._subjects.
+
+        The empty case is a real empty state rather than a stray sentence: it is
+        reachable (an import can clear subjects), and the 'Change subjects…'
+        button directly below it is already the way out, so the block itself
+        carries no duplicate action.
+        """
+        self._subjects_panel.clear()
         if not self._subjects:
-            self._subjects_row.add_component(Label(
-                text='No subjects locked in yet.', italic=True,
-                foreground='#9aa0a6'))
+            self._subjects_panel.add_component(make_empty_state(
+                'No subjects locked in yet.',
+                'Choose your studies so DotPoint knows what to look for.'))
             return
+        chips = make_row()
         for s in self._subjects:
-            self._subjects_row.add_component(Label(text=s, role='chip'))
+            chips.add_component(make_chip(s))
+        self._subjects_panel.add_component(chips)
+
+    # --- events --------------------------------------------------------------
 
     def _on_change_subjects(self, **event_args):
         proceed = confirm(
@@ -215,8 +295,7 @@ class SettingsForm(ColumnPanel):
         try:
             catalog = anvil.server.call('get_subject_catalog')
         except Exception as e:
-            Notification("Couldn't load the subject list: %s" % e,
-                         style='danger', timeout=4).show()
+            toast_error("Couldn't load the subject list: %s" % e)
             return
 
         # Re-open the picker with the user's own ticks after any failed
@@ -230,8 +309,7 @@ class SettingsForm(ColumnPanel):
             selected = picker.get_selection()
 
             if not any(s in MATHS_GROUP for s in selected):
-                Notification("Select at least one mathematics study.",
-                             style='danger', timeout=6).show()
+                toast_error("Select at least one mathematics study.")
                 continue
             if not any(s in ENGLISH_GROUP for s in selected):
                 if not confirm(
@@ -243,14 +321,14 @@ class SettingsForm(ColumnPanel):
             try:
                 settings = anvil.server.call('set_subjects', selected)
             except Exception as e:
-                Notification(str(e), style='danger', timeout=6).show()
+                toast_error(str(e))
                 continue
             break
 
         set_session_settings(settings)
         self._subjects = settings.get('subjects') or []
         self._render_subject_chips()
-        Notification("Subjects updated.", style='success', timeout=4).show()
+        toast("Subjects updated.")
 
     def _on_load_preset(self, **event_args):
         """Fill the term pickers with the VIC 2026 dates (user still clicks Save)."""
@@ -258,8 +336,7 @@ class SettingsForm(ColumnPanel):
             start_dp.date = s
             end_dp.date = e
         self._school_year_tb.text = '2026'
-        Notification("VIC 2026 term dates loaded — click Save to apply.",
-                     style='info', timeout=4).show()
+        toast("VIC 2026 term dates loaded — click Save to apply.", style='info')
 
     def _on_save_click(self, **event_args):
         fields = {
@@ -285,7 +362,7 @@ class SettingsForm(ColumnPanel):
             try:
                 fields['school_year'] = int(year_text)
             except ValueError:
-                Notification("School year must be a whole number.", style='danger', timeout=4).show()
+                toast_error("School year must be a whole number.")
                 return
         else:
             fields['school_year'] = None
@@ -302,6 +379,6 @@ class SettingsForm(ColumnPanel):
             settings = anvil.server.call('update_settings', fields)
             set_session_settings(settings)
             apply_theme(settings.get('theme'))
-            Notification("Settings saved.", style='success', timeout=4).show()
+            toast("Settings saved.")
         except Exception as e:
-            Notification("Couldn't save settings: %s" % e, style='danger', timeout=4).show()
+            toast_error("Couldn't save settings: %s" % e)

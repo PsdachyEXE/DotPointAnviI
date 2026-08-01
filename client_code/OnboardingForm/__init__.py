@@ -13,16 +13,23 @@ automatically if none was chosen; the form warns first so it's never a
 surprise). After locking in, subjects drive the editor dropdown, dashboard
 filter, parser alias priority and the Exams view; they change only via the
 deliberate Settings flow.
+
+Structure (spec §14): a single centred card — make_page() > make_card() —
+holding title, one-line caption, the two program rules as a micro line, the
+pill picker and the two actions. There is deliberately NO top bar: the router
+re-renders this form for every hash until subjects exist, so nav links would
+promise pages the student cannot reach yet. The only ways out are 'Lock in my
+subjects' and 'Sign out'.
 """
 
 import anvil
 import anvil.server
-from anvil import (
-    ColumnPanel, Label, Button, Link, Spacer, Notification, confirm, open_form,
-)
+from anvil import ColumnPanel, Label, Button, Spacer, confirm, open_form
 
 from ..common import (
     SubjectPicker, set_session_settings, apply_theme, _sign_out,
+    navigate, toast, toast_error,
+    make_page, make_card, make_page_title, make_row, make_empty_state,
 )
 
 # Mirrors _constants.ENGLISH_GROUP / MATHS_GROUP (client can't import server
@@ -39,19 +46,27 @@ class OnboardingForm(ColumnPanel):
         self.spacing_above = 'none'
         self.spacing_below = 'none'
 
-        card = ColumnPanel(role='card')
-        card.add_component(Label(text='What subjects do you do?',
-                                 font_size=26, bold=True))
+        body = make_page()
+        self.add_component(body)
+
+        card = make_card()
+        body.add_component(card)
+
+        # One hierarchy: title -> what it's for -> the rules -> the choice.
+        # The rules sit in a micro line rather than a paragraph because the
+        # student only needs them while they are actually picking.
+        card.add_component(make_page_title(
+            'What subjects do you do?',
+            'Your studies drive the parser, dashboard and exam timetable. '
+            'Change them any time in Settings.'))
         card.add_component(Label(
-            text='Pick your VCE studies — DotPoint uses them to tailor the '
-                 'parser, dashboard and exam timetable. You can change them '
-                 'later in Settings.',
-            foreground='#6b7280'))
-        card.add_component(Label(
-            text='Every VCE program includes an English-group study (VCAA '
-                 'rule), and DotPoint also asks for one mathematics study.',
-            font_size=12, italic=True, foreground='#9aa0a6'))
-        card.add_component(Spacer(height=8))
+            text='One mathematics study is required, and an English-group '
+                 'study is always kept (VCAA rule).',
+            role='micro'))
+        # The card role neutralises Anvil's per-component margins so that cards
+        # control their own rhythm, so the gaps between the three blocks of this
+        # card are set explicitly rather than inherited.
+        card.add_component(Spacer(height=16))
 
         try:
             catalog = anvil.server.call('get_subject_catalog')
@@ -59,41 +74,52 @@ class OnboardingForm(ColumnPanel):
             # The router re-renders this form for every hash while the user is
             # un-onboarded, so a dead-end here would trap them: always offer a
             # retry and a way out.
-            card.add_component(Label(
-                text="Couldn't load the subject list: %s" % e,
-                foreground='#d64550'))
-            retry = Button(text='Try again', role='primary')
-            retry.set_event_handler('click', lambda **ev: open_form('Main'))
-            card.add_component(retry)
-            sign_out = Link(text='Sign out', foreground='#6b7280')
-            sign_out.set_event_handler('click', lambda **ev: _sign_out())
-            card.add_component(sign_out)
-            self.add_component(card)
+            card.add_component(make_empty_state(
+                "Couldn't load the subject list",
+                str(e),
+                'Try again',
+                lambda: open_form('Main')))
+            card.add_component(self._sign_out_row())
             return
 
+        # The picker is a dumb component: it renders the catalog as toggle pills
+        # with live per-group counts and hands back a plain list of names. All
+        # VCE rules are checked below and again server-side in set_subjects.
         self._picker = SubjectPicker(catalog)
         card.add_component(self._picker)
 
-        card.add_component(Spacer(height=12))
+        card.add_component(Spacer(height=16))
+
         confirm_btn = Button(text='Lock in my subjects', role='primary')
         confirm_btn.set_event_handler('click', self._on_confirm)
-        card.add_component(confirm_btn)
+        # Sign out is a quiet ghost button beside the primary action: it must be
+        # reachable (this screen is a gate) without competing with it.
+        card.add_component(make_row(confirm_btn, self._sign_out_button()))
 
-        sign_out = Link(text='Sign out', foreground='#6b7280')
-        sign_out.set_event_handler('click', lambda **e: _sign_out())
-        card.add_component(sign_out)
+    # --- shared bits -------------------------------------------------------
+    def _sign_out_button(self):
+        """The escape hatch, built once so both the normal and error layouts
+        offer exactly the same way out."""
+        btn = Button(text='Sign out', role='ghost')
+        btn.set_event_handler('click', lambda **e: _sign_out())
+        return btn
 
-        self.add_component(card)
+    def _sign_out_row(self):
+        return make_row(self._sign_out_button())
 
+    # --- handlers ----------------------------------------------------------
     def _on_confirm(self, **event_args):
         selection = self._picker.get_selection()
 
+        # Validate in the order the student would fix things: something chosen,
+        # then maths, then the English warning (which is a confirm, not a block,
+        # because the server can repair it by appending 'English').
         if not selection:
-            Notification("Pick your subjects first.", style='danger', timeout=4).show()
+            toast_error("Pick your subjects first.")
             return
         if not any(s in MATHS_GROUP for s in selection):
-            Notification("Select at least one mathematics study — DotPoint "
-                         "needs one in every program.", style='danger', timeout=6).show()
+            toast_error("Select at least one mathematics study — DotPoint "
+                        "needs one in every program.")
             return
         if not any(s in ENGLISH_GROUP for s in selection):
             proceed = confirm(
@@ -105,12 +131,13 @@ class OnboardingForm(ColumnPanel):
         try:
             settings = anvil.server.call('set_subjects', selection)
         except Exception as e:
-            Notification(str(e), style='danger', timeout=6).show()
+            toast_error(str(e))
             return
 
+        # set_subjects returns the saved settings row, so push it straight into
+        # the session cache: the router reads it on the very next navigation to
+        # decide that onboarding is done, with no second round-trip.
         set_session_settings(settings)
         apply_theme(settings.get('theme'))
-        Notification("Subjects locked in — welcome to DotPoint!",
-                     style='success', timeout=4).show()
-        anvil.set_url_hash('dashboard')
-        open_form('Main')
+        toast("Subjects locked in — welcome to DotPoint!")
+        navigate('dashboard')
