@@ -785,6 +785,18 @@ native_deps:
       [data-notify="container"] { left:12px !important; right:12px !important;
         max-width:none; bottom:12px !important; }
     }
+    @media (max-width:640px) {
+      /* Six nav items will not fit on a phone. Wrapping them cost 169px of height
+         — a third of the screen before any content — so the bar stays one row and
+         scrolls sideways instead. */
+      .anvil-role-topbar > .flow-panel-gutter {
+        flex-wrap:nowrap !important; overflow-x:auto; -webkit-overflow-scrolling:touch; }
+      .anvil-role-topbar > .flow-panel-gutter > .flow-panel-item { flex:0 0 auto; }
+      .anvil-role-topbar > .flow-panel-gutter > .flow-panel-item:last-child {
+        margin-left:var(--dp-s2); }
+      .anvil-role-navitem, .anvil-role-navitem-active { padding:12px var(--dp-s2) !important; }
+      .anvil-role-brand { padding:12px 10px 12px 0 !important; }
+    }
     @media (max-width:560px) {
       .anvil-role-calcell, .anvil-role-calcell-overdue,
       .anvil-role-calcell-duetoday, .anvil-role-calcell-soon,
