@@ -451,8 +451,10 @@ native_deps:
       flex-wrap:wrap; }
     .anvil-role-banner .anvil-component { margin:0 !important; }
 
-    /* a dashboard column: no chrome, just rhythm */
-    .anvil-role-panel { padding:0 var(--dp-s2) !important; }
+    /* a dashboard column: no chrome, just rhythm. Bootstrap's column already
+       supplies the 15px gutter, so this must not add a second one — the calendar
+       needs every pixel of its column to fit seven days. */
+    .anvil-role-panel { padding:0 !important; }
 
     /* row of controls that wraps neatly and stays vertically centred */
     .anvil-role-toolbar { margin:0 0 var(--dp-s3) 0 !important; }
@@ -596,11 +598,18 @@ native_deps:
     .anvil-role-calgrid > .flow-panel-gutter,
     .anvil-role-calhead > .flow-panel-gutter {
       display:grid !important; grid-template-columns:repeat(7,1fr);
-      gap:var(--dp-s1); }
+      gap:3px;
+      /* Anvil gives .flow-panel-gutter -15px side margins so a flex row can bleed
+         into the container's padding. For a grid that just makes it 30px wider
+         than its column and clips Sunday off the end — so cancel them. */
+      margin-left:0 !important; margin-right:0 !important; }
     .anvil-role-calgrid, .anvil-role-calhead { margin:0 !important; }
+    /* Grid items only stretch to their column if they are block-level and have no
+       intrinsic width of their own; Anvil's .flow-panel-item is sized for flex. */
     .anvil-role-calgrid > .flow-panel-gutter > .flow-panel-item,
     .anvil-role-calhead > .flow-panel-gutter > .flow-panel-item {
-      display:block; min-width:0; }
+      display:block !important; width:100% !important; min-width:0 !important;
+      justify-self:stretch !important; }
     .anvil-role-calgrid .anvil-component, .anvil-role-calhead .anvil-component {
       margin:0 !important; }
 
@@ -614,7 +623,7 @@ native_deps:
     .anvil-role-calcell-duetoday, .anvil-role-calcell-soon,
     .anvil-role-calcell-distant, .anvil-role-calcell-blank {
       display:block !important; width:100%; box-sizing:border-box;
-      min-height:52px; padding:var(--dp-s1) var(--dp-s2) !important;
+      min-height:50px; padding:3px 5px !important;
       border:1px solid transparent; border-radius:var(--dp-r-sm);
       text-align:left; text-decoration:none !important;
       transition:background .12s ease, border-color .12s ease; }
@@ -635,14 +644,24 @@ native_deps:
       display:inline-block; min-width:20px; text-align:center;
       background:var(--dp-accent); color:#fff !important;
       border-radius:var(--dp-r-pill); padding:0 5px; }
-    /* count of items on that day (only rendered when > 1) */
+    /* how many assessments fall on that day — a badge, so it never reads as part
+       of the date */
     .anvil-role-calcount .label-text {
-      font-size:var(--dp-fs-micro) !important; color:var(--dp-muted) !important;
-      font-weight:600 !important; }
-    /* VCE exam marker — glyph as well as colour, so it never signals by colour alone */
+      display:inline-block; min-width:15px; text-align:center;
+      font-size:10px !important; line-height:15px; font-weight:700 !important;
+      color:var(--dp-surface) !important; background:var(--dp-muted);
+      border-radius:var(--dp-r-pill); padding:0 3px; }
+    /* VCE exam marker — a glyph as well as colour, so it never signals by colour alone */
     .anvil-role-calexam .label-text {
-      font-size:var(--dp-fs-micro) !important; color:var(--dp-exam) !important;
+      font-size:10px !important; color:var(--dp-exam) !important;
       font-weight:700 !important; }
+    /* both markers sit on one line under the day number */
+    .anvil-role-calcount, .anvil-role-calexam { display:inline-block; }
+    .anvil-role-calcell .anvil-panel-section,
+    .anvil-role-calcell-overdue .anvil-panel-section,
+    .anvil-role-calcell-duetoday .anvil-panel-section,
+    .anvil-role-calcell-soon .anvil-panel-section,
+    .anvil-role-calcell-distant .anvil-panel-section { line-height:1.2; }
 
     /* ---------- 12. Subject picker pills ---------- */
     /* Anvil renders a CheckBox as  div > div.checkbox > label > input + span.

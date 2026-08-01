@@ -33,7 +33,7 @@ from anvil import (
 
 from ..common import (
     make_top_bar, make_page, make_row, make_toolbar, make_list_card,
-    make_banner, make_section_header, make_chip, make_band_chip,
+    make_banner, make_section_header, make_chip,
     make_empty_state, band_role, navigate, toast_error,
 )
 
@@ -347,11 +347,14 @@ class DashboardForm(ColumnPanel):
                     and month == self._today.month and day == self._today.day)
         cell.add_component(Label(text=str(day),
                                  role='calnum-now' if is_today else 'calnum'))
-        if len(items) > 1:
-            cell.add_component(Label(text='%d due' % len(items), role='calcount'))
+        # A cell is only ~40px wide, so the markers have to be single glyphs.
+        # The count badge says how much is due; the tint says how urgent.
+        if items:
+            cell.add_component(Label(text=str(len(items)), role='calcount'))
         if exams:
-            # Glyph as well as colour, so an exam day never signals by colour alone.
-            cell.add_component(Label(text='▲ exam', role='calexam'))
+            # A glyph as well as colour, so an exam day never signals by colour
+            # alone (the purple tint is invisible to some students).
+            cell.add_component(Label(text='▲', role='calexam'))
         return cell
 
     def _on_day_click(self, day):
@@ -405,11 +408,16 @@ class DashboardForm(ColumnPanel):
                 'All clear',
                 'Nothing is due in the next 30 days.'))
             return
+        # This column is the narrowest on the page, so the date and the title
+        # are stacked rather than laid side by side — side by side they wrap
+        # mid-row and the dates stop lining up.
         for a in upcoming:
             band = a.get('urgency_band', 'distant')
-            self._upcoming_panel.add_component(make_row(
-                make_band_chip(a.get('due_display') or '', band),
-                Label(text=a.get('title') or '(untitled)', role='caption')))
+            item = make_list_card(band)
+            item.add_component(Label(text=a.get('due_display') or '', role='micro'))
+            item.add_component(Label(text=a.get('title') or '(untitled)',
+                                     role='caption'))
+            self._upcoming_panel.add_component(item)
 
     # --- handlers ----------------------------------------------------------
     def _on_filter_change(self, **event_args):
