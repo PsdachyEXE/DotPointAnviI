@@ -272,11 +272,12 @@ native_deps:
          looks, which is why the colours are not in _constants.py any more. */
       --dp-overdue:#c8384a;  --dp-overdue-soft:#fdeaec;
       --dp-duetoday:#c06a12; --dp-duetoday-soft:#fdf1e2;
-      --dp-soon:#2f6fd0;     --dp-soon-soft:#e8f0fc;
+      --dp-soon:#3b7dd8;     --dp-soon-soft:#e9f1fc;
       --dp-distant:#78828f;  --dp-distant-soft:#eef0f3;
 
       /* semantic — parser confidence */
-      --dp-ok:#1f7a37; --dp-warn:#c06a12; --dp-bad:#c8384a;
+      --dp-ok:#1f7a37;   --dp-ok-soft:#e6f4ea;
+      --dp-warn:#c06a12; --dp-bad:#c8384a;
 
       /* semantic — VCE exam marker */
       --dp-exam:#6d3ce0; --dp-exam-soft:#f1ebfd;
@@ -311,10 +312,11 @@ native_deps:
 
       --dp-overdue:#ff8b98;  --dp-overdue-soft:#3a1f25;
       --dp-duetoday:#f2a742; --dp-duetoday-soft:#382a18;
-      --dp-soon:#7db0ff;     --dp-soon-soft:#1c2d47;
+      --dp-soon:#8cc2ff;     --dp-soon-soft:#1b2c44;
       --dp-distant:#93a0b2;  --dp-distant-soft:#232d3c;
 
-      --dp-ok:#5fd18a; --dp-warn:#f2a742; --dp-bad:#ff8b98;
+      --dp-ok:#5fd18a;   --dp-ok-soft:#1d3326;
+      --dp-warn:#f2a742; --dp-bad:#ff8b98;
 
       --dp-exam:#b494ff; --dp-exam-soft:#282040;
     }
@@ -616,7 +618,7 @@ native_deps:
     .anvil-role-chip-soon     { background:var(--dp-soon-soft);     border-color:transparent; }
     .anvil-role-chip-distant  { background:var(--dp-distant-soft);  border-color:transparent; }
     .anvil-role-chip-exam     { background:var(--dp-exam-soft);     border-color:transparent; }
-    .anvil-role-chip-ok       { background:var(--dp-distant-soft);  border-color:transparent; }
+    .anvil-role-chip-ok       { background:var(--dp-ok-soft);       border-color:transparent; }
     .anvil-role-chip-warn     { background:var(--dp-duetoday-soft); border-color:transparent; }
     .anvil-role-chip-bad      { background:var(--dp-overdue-soft);  border-color:transparent; }
 

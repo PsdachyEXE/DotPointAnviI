@@ -1172,6 +1172,170 @@ study when unambiguous.
 
 ---
 
+## 14. Design system (UI overhaul, 2026-08)
+
+Every feature was finished and live before this slice; nothing here changes what
+the app *does*. The problem it solves is that the app looked like a working
+prototype: colours were written as hex literals inside the forms (the muted grey
+`#9aa0a6` appeared 20+ times), the same visual idea — a section heading, an
+empty list, a status tag — was expressed differently on each screen, and because
+a hex value in Python cannot change with the theme, half the app did not adapt
+when the student switched to dark mode.
+
+The fix is a two-layer separation that the rest of this section describes:
+**the stylesheet decides how things look; the forms only say what things are.**
+
+### 14.1 Principles
+
+1. One source of truth. Every colour, size, radius, space and shadow is a CSS
+   custom property in `anvil.yaml` → `native_deps.head_html`.
+2. Forms name meaning, not appearance. A form writes `role='t-overdue'`, never
+   `foreground='#d64550'`. No client module contains a hex colour; an offline
+   suite asserts that (§14.7).
+3. Both themes, always. Dark mode is one class on `<body>`; because every colour
+   is a variable, one declaration block re-skins the whole app.
+4. Compose, don't repeat. Small builders in `client_code/common` mean a form
+   body reads as composition rather than a wall of styling arguments.
+5. Semantic colour survives. Urgency bands, parser confidence and the VCE exam
+   marker keep their meaning in both palettes, and never signal by colour alone.
+6. Minimalism is subtraction. Fewer borders, more whitespace, one clear
+   hierarchy per screen: page title → section header → content.
+
+### 14.2 Token layer
+
+`:root` declares the light palette; `body.dotpoint-dark` re-declares only the
+colour tokens. Spacing, type scale and radii are shared, so the two themes can
+never drift in layout.
+
+| Group | Tokens |
+|---|---|
+| Spacing (4px base) | `--dp-s1` … `--dp-s7` (4, 8, 12, 16, 24, 32, 48px) |
+| Radii | `--dp-r-sm`, `--dp-r-md`, `--dp-r-lg`, `--dp-r-pill` |
+| Type scale | `--dp-fs-display`, `-page`, `-card`, `-body`, `-cap`, `-micro` |
+| Surfaces | `--dp-bg`, `--dp-surface`, `--dp-surface-2`, `--dp-border`, `--dp-border-strong` |
+| Text | `--dp-heading`, `--dp-text`, `--dp-muted`, `--dp-faint` |
+| Brand | `--dp-accent`, `-hover`, `-soft`, `--dp-focus` |
+| Urgency (FR21) | `--dp-overdue`, `--dp-duetoday`, `--dp-soon`, `--dp-distant` (+ `-soft` fills) |
+| Confidence (FR17) | `--dp-ok`, `--dp-warn`, `--dp-bad` |
+| Exams (§13) | `--dp-exam`, `--dp-exam-soft` |
+| Elevation | `--dp-shadow`, `--dp-shadow-lg` |
+
+The dark palette **lightens** the semantic hues rather than reusing them
+(`--dp-overdue` is `#c8384a` on white and `#ff8b98` on slate): the same red
+would be unreadable on a dark surface, but a lighter tint of it is still
+recognisably "overdue".
+
+`server_code/_constants.URGENCY_COLOURS` was **deleted** in this slice. The
+server's job is to say *which* band an assessment is in; how a band looks is the
+client's. The band name is now the whole contract across that boundary.
+
+### 14.3 Role vocabulary
+
+Anvil turns `role='card'` into the DOM class `.anvil-role-card`, so every rule
+is written against `.anvil-role-<name>`.
+
+| Group | Roles |
+|---|---|
+| Type | `display`, `pagetitle`, `pagehead`, `sectionhead`, `cardtitle`, `muted`, `caption`, `micro` |
+| Tone | `t-overdue`, `t-duetoday`, `t-soon`, `t-distant`, `t-exam`, `t-ok`, `t-warn`, `t-bad`, `t-accent` |
+| Layout | `page`, `panel`, `row`, `toolbar`, `field`, `divider`, `dashgrid` |
+| Surfaces | `card`, `listcard` (+ `-overdue`/`-duetoday`/`-soon`/`-distant`), `banner`, `empty`, `authcard` |
+| Navigation | `topbar`, `brand`, `navitem`, `navitem-active` |
+| Buttons | `primary`, `secondary`, `ghost`, `danger`, `iconbtn` |
+| Chips | `chip` (+ `-accent`/`-exam`/`-ok`/`-warn`/`-bad`/ the four urgency suffixes) |
+| Inputs | `bigfield`, `pill` |
+| Calendar | `calgrid`, `calhead`, `calcell` (+ urgency suffixes), `calcell-blank`, `calnum`, `calnum-now`, `calcount`, `calexam` |
+
+The server's urgency band `today` is mapped to the tone name `duetoday`, because
+the calendar separately needs "is today" styling and the two must not collide.
+`common.band_role(band, prefix)` does that mapping in one place.
+
+### 14.4 The component kit (`client_code/common`)
+
+| Builder | Returns |
+|---|---|
+| `make_page(*c)` | the centred content column every signed-in screen sits in |
+| `make_page_title(title, subtitle=None)` | the h1 block of a screen |
+| `make_section_header(title, hint=None)` | small tracked label that opens a section |
+| `make_card(*c)` | a surface panel |
+| `make_list_card(band=None)` | a list row whose left edge carries the urgency band |
+| `make_banner(*c)` | a quiet full-width strip (tips, next-exam countdown) |
+| `make_row(*c)` / `make_toolbar(*c)` | a wrapping row of components / of controls |
+| `make_chip(text, tone=None)` / `make_band_chip(text, band)` | a rounded tag |
+| `make_field(label, component, hint=None)` | a labelled form control |
+| `make_empty_state(title, hint, action_text, action_click)` | what a panel shows when it has nothing |
+| `make_divider()` | a hairline rule |
+| `toast` / `toast_error` / `toast_warn` | the app's only transient-message call sites |
+| `from_iso` / `fmt_date` / `to_iso` / `MONTHS_ABBR` | shared date formatting (Skulpt has no usable `strftime`) |
+| `SubjectPicker` | the grouped pill multi-select (§11) |
+
+### 14.5 What Anvil's markup forced
+
+These are the non-obvious constraints the implementation had to work around.
+Each was measured against the running app, not assumed.
+
+- A **FlowPanel** renders `.flow-panel > .flow-panel-gutter > .flow-panel-item`,
+  and the gutter is the flex container. Overriding it to `display:grid` is what
+  makes a real calendar possible.
+- That gutter carries **−15px side margins** and each item a **15px side
+  margin** (Anvil's own row spacing). Both must be cancelled wherever the
+  stylesheet sets its own `gap`, or items sit ~38px apart and the first one is
+  indented out of line with the heading above it.
+- A **GridPanel** emits `col-xs-N`, `col-sm-N`, `col-md-N` *and* `col-lg-N` for
+  the same number, so Bootstrap's own responsive stacking can never fire.
+  Stacking has to be a media query that overrides width and float (§14.6).
+- A **Label**'s text node is `.label-text`; a **Link**'s is `.link-text`. A rule
+  written for one silently misses the other.
+- A **TextBox** puts its role class on the `<input>` itself — there is no
+  wrapper — so `.anvil-role-bigfield input` matches nothing.
+- **Spacer does not accept `role`** and raises at construction if given one.
+  `make_divider()` is therefore built from an empty ColumnPanel.
+- A **CheckBox** renders `div.checkbox > label > input + span`. Hiding the input
+  and styling the sibling `<span>` turns it into a toggle pill with no
+  JavaScript — this is how the reminder options and the subject picker work.
+
+### 14.6 Three behavioural fixes carried by this slice
+
+**Toasts (defect 13).** Anvil Notifications are bootstrap-notify elements fixed
+at `top:20px`, i.e. directly over the top bar, and success toasts were observed
+failing to auto-dismiss — a stuck toast then swallowed clicks on the navigation.
+`common.toast()` is now the single call site: it keeps a reference to every live
+toast and dismisses it on its own timer, caps the visible stack at three, and
+the stylesheet moves the stack to the bottom-right so a stuck toast can never
+cover the nav again. `toast_warn` is kept distinct from `toast_error` because an
+empty text box is not a failure and colouring routine validation red teaches the
+student to ignore red.
+
+**Browser navigation.** `Main` now installs a `hashchange` listener (once per
+session), so Back, Forward and a pasted `#notes` link re-route without a full
+reload. `common.navigate()` still sets the hash *and* re-enters the router
+directly: relying on the event alone would make every navigation depend on it
+firing, and the listener deliberately ignores events raised while a dialog is
+fading out — which is exactly when signing in and finishing onboarding navigate.
+The listener compares the new hash against the route the router last drew and
+ignores the echo of the app's own writes, so nothing renders twice (NFR01: one
+round-trip per screen).
+
+**Mobile.** Below 900px the dashboard's three panels each take full width;
+below 640px the top bar stays a single scrolling row instead of wrapping onto
+three lines (which cost 169px of a 812px-tall phone screen before any content).
+
+### 14.7 Keeping it honest
+
+Two offline assertions guard the system, because both failure modes are silent:
+
+- **No client module may contain a hex colour literal.** That is the exact
+  defect this slice removed, and it would reappear one convenient `foreground=`
+  at a time.
+- **Every `role=` used in client code must have a matching rule in the
+  stylesheet.** A role with no rule renders as unstyled default Anvil — it looks
+  like a layout bug, not like a typo.
+
+Both live in the constants-integrity suite (docs/TESTING.md §1), which also
+still checks the hand-copied enum mirrors.
+
+---
+
 ## Coverage check
 
 Cross-reference of `REQUIREMENTS_COVERAGE.md` IMPLEMENTED + PARTIAL requirements to their spec locations:
