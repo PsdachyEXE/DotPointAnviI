@@ -87,14 +87,32 @@ def _on_hash_change(event):
     is exactly what this listener is for: Back, Forward, and a #link the user
     pasted into the address bar.
     """
-    if _modal_is_open():
-        return
     current = anvil.get_url_hash()
     if not isinstance(current, str):
         current = ''
     if current == _listener['hash']:
+        return  # the echo of our own write; the right form is already drawn
+
+    if _modal_is_open():
+        # Re-routing now would redraw the page behind an open dialog. Put the
+        # hash back instead, so the address bar keeps naming what is actually
+        # on screen. (That write raises another hashchange, but by then it
+        # matches what we last drew and is caught by the check above.)
+        _restore_hash()
         return
+
     open_form('Main')
+
+
+def _restore_hash():
+    """Put the URL back to the route currently on screen, without adding a
+    history entry — otherwise the user would have to press Back twice."""
+    if _listener['hash'] is None:
+        return
+    try:
+        anvil.set_url_hash(_listener['hash'], set_in_history=False)
+    except TypeError:
+        anvil.set_url_hash(_listener['hash'])
 
 
 class Main(ColumnPanel):
@@ -111,6 +129,15 @@ class Main(ColumnPanel):
         # only plain string routes, so coerce anything else to ''.
         if not isinstance(hash_value, str):
             hash_value = ''
+
+        # Claim this route BEFORE doing anything that can block. Deciding the
+        # route below calls get_settings(), and an Anvil server call suspends
+        # the client — which lets the browser deliver the hashchange raised by
+        # the navigate() that got us here. If the route were only recorded at
+        # render time, that event would arrive while this still said 'login',
+        # look like a genuine Back press, and build the whole screen a second
+        # time (two get_dashboard_data round-trips, against NFR01).
+        _listener['hash'] = hash_value
 
         user = anvil.users.get_user(allow_remembered=True)
 
@@ -157,9 +184,9 @@ class Main(ColumnPanel):
         Forms are imported lazily so that routes whose forms don't exist yet
         (built in later slices) never break the router at import time.
 
-        Every route decision above has finished writing the hash by the time it
-        gets here, so this is the point at which to record what is on screen —
-        _on_hash_change compares against it to ignore the echo of our own write.
+        Re-records the route: _route_to_current claims it up front, but the
+        decisions in between can redirect (a signed-in user hitting '#login',
+        or the onboarding gate), so this is the last word on what is on screen.
         """
         current = anvil.get_url_hash()
         _listener['hash'] = current if isinstance(current, str) else ''

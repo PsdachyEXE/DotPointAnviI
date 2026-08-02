@@ -123,7 +123,8 @@ class LoginForm(ColumnPanel):
         # Fresh account context: never reuse a previous session's cached
         # settings (theme / onboarding gate read them on the next route).
         clear_session_settings()
-        # Only set the hash — Main listens for hashchange and re-renders
-        # itself. Calling open_form('Main') as well would draw the dashboard
-        # twice, and the second pass would re-run every server call on it.
+        # navigate() sets the hash and re-enters the router itself. It has to
+        # render directly rather than wait for the hashchange it raises: this
+        # call happens the instant the sign-in dialog closes, and Main's
+        # listener ignores events raised while a dialog is fading out.
         navigate('dashboard')

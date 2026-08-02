@@ -53,7 +53,7 @@ def _days_chip_text(days):
     if days < 0:
         return 'done'
     if days == 0:
-        return 'TODAY'
+        return 'today'
     if days == 1:
         return 'tomorrow'
     return 'in %d days' % days

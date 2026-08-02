@@ -168,7 +168,7 @@ class NotesForm(ColumnPanel):
         if tags:
             tag_row = make_row()
             for t in tags:
-                tag_row.add_component(make_chip(t))
+                tag_row.add_component(make_chip('#%s' % t))
             card.add_component(tag_row)
 
         # Newlines are flattened because a list row is a single-line summary;

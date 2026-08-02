@@ -149,7 +149,12 @@ class DashboardForm(ColumnPanel):
                                      filters=self._build_filters(),
                                      sort={'by': self._sort_dd.selected_value or 'due_date'})
         except Exception as e:
+            # Clear ALL three panels: leaving the calendar and the 30-day list
+            # showing pre-failure data next to an error message reads as though
+            # part of the page is still live.
             self._list_panel.clear()
+            self._calendar_panel.clear()
+            self._upcoming_panel.clear()
             toast_error("Couldn't load your dashboard: %s" % e)
             self._list_panel.add_component(make_empty_state(
                 "Couldn't load your dashboard",

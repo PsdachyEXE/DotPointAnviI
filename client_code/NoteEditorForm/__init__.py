@@ -56,18 +56,22 @@ class NoteEditorForm(ColumnPanel):
         self.add_component(make_field('Content', self._content_ta,
                                       hint='Plain text — markdown is not rendered.'))
 
-        # The tag editor is one field group: the add-control row is the field's
-        # component, and the chips panel is appended to the same group so the
-        # tags stay visually attached to the box that creates them.
+        # The tag editor is one field group. make_field lays its parts out as
+        # caption -> component -> hint, so the add-row AND the chips have to go
+        # in together as the component; appending the chips to the group
+        # afterwards would drop them below the hint, away from the box that
+        # creates them.
         self._tag_tb = TextBox(placeholder='add a tag')
         self._tag_tb.set_event_handler('pressed_enter', self._on_add_tag)
         add_tag_btn = Button(text='Add', role='secondary')
         add_tag_btn.set_event_handler('click', self._on_add_tag)
-        tags_field = make_field('Tags', make_row(self._tag_tb, add_tag_btn),
-                                hint='Tags are how notes are filtered on the Notes page.')
         self._tag_pills = make_row()
-        tags_field.add_component(self._tag_pills)
-        self.add_component(tags_field)
+        tag_editor = ColumnPanel()
+        tag_editor.add_component(make_row(self._tag_tb, add_tag_btn))
+        tag_editor.add_component(self._tag_pills)
+        self.add_component(make_field(
+            'Tags', tag_editor,
+            hint='Tags are how notes are filtered on the Notes page.'))
 
         # Left as a plain labelled checkbox: the label *is* the question, so
         # wrapping it in a make_field caption would just say it twice.
@@ -118,7 +122,7 @@ class NoteEditorForm(ColumnPanel):
             # wrong tag.
             x = Button(text='x', role='iconbtn')
             x.set_event_handler('click', lambda tag=t, **e: self._remove_tag(tag))
-            self._tag_pills.add_component(make_row(make_chip(t), x))
+            self._tag_pills.add_component(make_row(make_chip('#%s' % t), x))
 
     def _remove_tag(self, tag):
         self._tags = [t for t in self._tags if t != tag]

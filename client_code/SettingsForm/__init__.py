@@ -38,7 +38,8 @@ from anvil import (
 from ..common import (
     make_top_bar, make_page, make_page_title, make_section_header, make_card,
     make_row, make_field, make_chip, make_empty_state, toast, toast_error,
-    SubjectPicker, apply_theme, set_session_settings, from_iso, to_iso,
+    SubjectPicker, apply_theme, set_session_settings, get_session_settings,
+    from_iso, to_iso,
 )
 
 # Mirrors _constants.ENGLISH_GROUP / MATHS_GROUP (client can't import server
@@ -107,6 +108,7 @@ class SettingsForm(ColumnPanel):
         body.add_component(make_row(save_btn))
 
         self._subjects = []
+        self._loaded = False
         self._load_settings()
 
     # --- card builders -------------------------------------------------------
@@ -214,6 +216,9 @@ class SettingsForm(ColumnPanel):
         except Exception as e:
             toast_error("Couldn't load settings: %s" % e)
             return
+        # Only now is self._subjects trustworthy. _on_change_subjects checks
+        # this before seeding the picker (see the comment there).
+        self._loaded = True
         # Heal the per-session cache with this fresh copy (e.g. after an
         # import changed settings server-side).
         set_session_settings(s)
@@ -274,6 +279,21 @@ class SettingsForm(ColumnPanel):
     # --- events --------------------------------------------------------------
 
     def _on_change_subjects(self, **event_args):
+        # Guard against overwriting a locked subject list with nothing. If the
+        # page-load get_settings() failed, self._subjects is still [] — the
+        # picker would open with no ticks, and saving it would wipe the
+        # student's real subjects on the back of a transient network error.
+        # Try once more to find out what they actually have before offering
+        # the picker at all.
+        if not self._loaded:
+            try:
+                self._subjects = get_session_settings(refresh=True).get('subjects') or []
+                self._loaded = True
+            except Exception as e:
+                toast_error("Couldn't read your current subjects, so changing "
+                            "them isn't safe right now: %s" % e)
+                return
+
         proceed = confirm(
             "Changing your subjects re-tailors the parser, dashboard filter "
             "and exam timetable. Assessments you've already saved keep their "

@@ -250,13 +250,14 @@ native_deps:
       --dp-border-strong:#d5dae2;
       --dp-heading:#0f172a;
       --dp-text:#26303c;
-      --dp-muted:#667085;
-      --dp-faint:#8b95a5;
+      --dp-muted:#596273;
+      --dp-faint:#6e7784;
 
       /* brand accent */
       --dp-accent:#2f6fd0;
       --dp-accent-hover:#245ab0;
       --dp-accent-soft:#e8f0fc;
+      --dp-on-accent:#ffffff;   /* text drawn ON the accent fill */
       --dp-focus:rgba(47,111,208,.18);
 
       /* controls */
@@ -270,17 +271,20 @@ native_deps:
 
       /* semantic — urgency bands. The server names the band; these decide how it
          looks, which is why the colours are not in _constants.py any more. */
-      --dp-overdue:#c8384a;  --dp-overdue-soft:#fdeaec;
-      --dp-duetoday:#c06a12; --dp-duetoday-soft:#fdf1e2;
-      --dp-soon:#3b7dd8;     --dp-soon-soft:#e9f1fc;
-      --dp-distant:#78828f;  --dp-distant-soft:#eef0f3;
+      /* Read at 11px on a pale tint, so these are deliberately darker than the
+         hues they replace: each now clears WCAG AA (4.5:1) on both its own soft
+         fill and the card surface. The ramp red-orange-blue-grey is unchanged. */
+      --dp-overdue:#b32c3e;  --dp-overdue-soft:#fdeaec;
+      --dp-duetoday:#96530d; --dp-duetoday-soft:#fdf1e2;
+      --dp-soon:#2b60ab;     --dp-soon-soft:#e9f1fc;
+      --dp-distant:#5d6673;  --dp-distant-soft:#eef0f3;
 
       /* semantic — parser confidence */
-      --dp-ok:#1f7a37;   --dp-ok-soft:#e6f4ea;
-      --dp-warn:#c06a12; --dp-bad:#c8384a;
+      --dp-ok:#186a2e;   --dp-ok-soft:#e6f4ea;
+      --dp-warn:#96530d; --dp-bad:#b32c3e;
 
       /* semantic — VCE exam marker */
-      --dp-exam:#6d3ce0; --dp-exam-soft:#f1ebfd;
+      --dp-exam:#5a2ec4; --dp-exam-soft:#f1ebfd;
     }
 
     /* ---------- 2. Tokens — dark ---------- */
@@ -301,6 +305,9 @@ native_deps:
       --dp-accent:#5c9dff;
       --dp-accent-hover:#8ab8ff;
       --dp-accent-soft:#1c2d47;
+      /* White on the dark palette's lighter accent is only 2.7:1 - fails AA.
+         Near-black on it is ~8:1, so the accent stays vivid AND stays legible. */
+      --dp-on-accent:#0b1220;
       --dp-focus:rgba(92,157,255,.25);
 
       --dp-btn2-bg:#212b3a; --dp-btn2-text:#c9d4e2; --dp-btn2-hover:#2b3646;
@@ -354,6 +361,17 @@ native_deps:
     [class*="anvil-role-listcard"] > .anvil-panel-section + .anvil-panel-section {
       margin-top:var(--dp-s2);
     }
+    /* ...but that reset is blunt: it also zeroes the margin these roles declare
+       for THEMSELVES, so a make_field inside a make_card lost its 12px and fell
+       back to the 8px above. Put it back. Same specificity as the reset, later in
+       the sheet, so it wins. */
+    .anvil-role-card .anvil-role-field,
+    .anvil-role-card .anvil-role-toolbar,
+    .anvil-role-card .anvil-role-pickgrid,
+    .anvil-role-card .anvil-role-empty {
+      margin-bottom:var(--dp-s3) !important; }
+    .anvil-role-card .anvil-role-divider {
+      margin-top:var(--dp-s4) !important; margin-bottom:var(--dp-s4) !important; }
 
     /* Every FlowPanel we use as a row sets its own `gap`. Anvil also gives the row
        a -15px side bleed and each item a 15px side margin, which together add ~38px
@@ -453,7 +471,9 @@ native_deps:
     /* the last item of the bar (Sign out) is pushed to the right edge, so no
        spacer component is needed in make_top_bar */
     .anvil-role-topbar > .flow-panel-gutter > .flow-panel-item:last-child {
-      margin-left:auto; }
+      /* !important is required, not decorative: the row reset above zeroes every
+         item's side margins with !important, and importance beats specificity. */
+      margin-left:auto !important; }
 
     /* ---------- 7. Surfaces ---------- */
     .anvil-role-card {
@@ -531,7 +551,8 @@ native_deps:
 
     /* ---------- 8. Buttons ---------- */
     .anvil-role-primary button {
-      background:var(--dp-accent) !important; color:#fff !important;
+      background:var(--dp-accent) !important;
+      color:var(--dp-on-accent) !important;
       border:1px solid var(--dp-accent) !important;
       border-radius:var(--dp-r-sm) !important;
       padding:7px 18px !important; font-weight:600 !important;
@@ -610,7 +631,11 @@ native_deps:
     .anvil-role-chip-exam .label-text, .anvil-role-chip-ok .label-text,
     .anvil-role-chip-warn .label-text, .anvil-role-chip-bad .label-text {
       font-size:var(--dp-fs-micro) !important; font-weight:600 !important;
-      color:var(--dp-chip-text) !important; letter-spacing:.01em; }
+      letter-spacing:.01em;
+      /* NOT !important: the tone rules below override this, and relying on source
+         order between two equally-specific !important declarations would grey out
+         every coloured chip the moment the blocks were reordered. */
+      color:var(--dp-chip-text); }
 
     .anvil-role-chip-accent   { background:var(--dp-accent-soft);   border-color:transparent; }
     .anvil-role-chip-overdue  { background:var(--dp-overdue-soft);  border-color:transparent; }
@@ -687,7 +712,7 @@ native_deps:
       font-weight:600 !important; }
     .anvil-role-calnum-now .label-text {
       display:inline-block; min-width:20px; text-align:center;
-      background:var(--dp-accent); color:#fff !important;
+      background:var(--dp-accent); color:var(--dp-on-accent) !important;
       border-radius:var(--dp-r-pill); padding:0 5px; }
     /* how many assessments fall on that day — a badge, so it never reads as part
        of the date */
@@ -731,7 +756,7 @@ native_deps:
       color:var(--dp-accent); }
     .anvil-role-pill input[type=checkbox]:checked + span {
       background:var(--dp-accent); border-color:var(--dp-accent);
-      color:#fff; font-weight:600; }
+      color:var(--dp-on-accent); font-weight:600; }
     .anvil-role-pill input[type=checkbox]:focus + span {
       box-shadow:0 0 0 3px var(--dp-focus); }
 
@@ -762,7 +787,8 @@ native_deps:
     .modal-footer .btn:hover { background:var(--dp-btn2-hover) !important; }
     .anvil-alert-footer-button-panel > .anvil-button:first-child button,
     .modal-footer .btn-primary, .modal-footer .btn-success {
-      background:var(--dp-accent) !important; color:#ffffff !important;
+      background:var(--dp-accent) !important;
+      color:var(--dp-on-accent) !important;
       border:1px solid var(--dp-accent) !important; font-weight:600 !important; }
     .anvil-alert-footer-button-panel > .anvil-button:first-child button:hover,
     .modal-footer .btn-primary:hover, .modal-footer .btn-success:hover {
@@ -814,13 +840,18 @@ native_deps:
     @media (max-width:900px) {
       .anvil-role-dashgrid .row > [class*="col-"] {
         width:100% !important; float:none !important; }
-      .anvil-role-panel { padding:0 !important; }
       input.anvil-role-bigfield.form-control { min-width:0; width:100%; }
       .anvil-role-page { padding:0 var(--dp-s3) var(--dp-s6) var(--dp-s3) !important; }
       .anvil-role-topbar { padding:0 var(--dp-s3) !important; }
       .anvil-role-navitem, .anvil-role-navitem-active { padding:12px var(--dp-s2) !important; }
       [data-notify="container"] { left:12px !important; right:12px !important;
         max-width:none; bottom:12px !important; }
+      /* these repeat the desktop stack offsets at phone spacing; they must live
+         inside the query because they out-specify the rule above */
+      [data-notify="container"] ~ [data-notify="container"] {
+        bottom:84px !important; }
+      [data-notify="container"] ~ [data-notify="container"] ~ [data-notify="container"] {
+        bottom:156px !important; }
     }
     @media (max-width:640px) {
       /* Six nav items will not fit on a phone. Wrapping them cost 169px of height
@@ -830,14 +861,13 @@ native_deps:
         flex-wrap:nowrap !important; overflow-x:auto; -webkit-overflow-scrolling:touch; }
       .anvil-role-topbar > .flow-panel-gutter > .flow-panel-item { flex:0 0 auto; }
       .anvil-role-topbar > .flow-panel-gutter > .flow-panel-item:last-child {
-        margin-left:var(--dp-s2); }
-      .anvil-role-navitem, .anvil-role-navitem-active { padding:12px var(--dp-s2) !important; }
+        /* on a phone the bar scrolls, so Sign out follows the last tab rather
+           than being pushed to the edge — !important for the same reason as above */
+        margin-left:var(--dp-s2) !important; }
       .anvil-role-brand { padding:12px 10px 12px 0 !important; }
     }
     @media (max-width:560px) {
-      .anvil-role-calcell, .anvil-role-calcell-overdue,
-      .anvil-role-calcell-duetoday, .anvil-role-calcell-soon,
-      .anvil-role-calcell-distant { min-height:40px; padding:2px 4px !important; }
+      [class*="anvil-role-calcell"] { min-height:40px; padding:2px 4px !important; }
       .anvil-role-authcard { padding:var(--dp-s5) var(--dp-s4) !important; }
     }
     </style>
