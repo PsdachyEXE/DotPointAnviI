@@ -1214,7 +1214,7 @@ never drift in layout.
 | Type scale | `--dp-fs-display`, `-page`, `-card`, `-body`, `-cap`, `-micro` |
 | Surfaces | `--dp-bg`, `--dp-surface`, `--dp-surface-2`, `--dp-border`, `--dp-border-strong` |
 | Text | `--dp-heading`, `--dp-text`, `--dp-muted`, `--dp-faint` |
-| Brand | `--dp-accent`, `-hover`, `-soft`, `--dp-focus` |
+| Brand | `--dp-accent`, `-hover`, `-soft`, `--dp-on-accent`, `--dp-focus` |
 | Urgency (FR21) | `--dp-overdue`, `--dp-duetoday`, `--dp-soon`, `--dp-distant` (+ `-soft` fills) |
 | Confidence (FR17) | `--dp-ok`, `--dp-warn`, `--dp-bad` |
 | Exams (§13) | `--dp-exam`, `--dp-exam-soft` |
@@ -1224,6 +1224,15 @@ The dark palette **lightens** the semantic hues rather than reusing them
 (`--dp-overdue` is `#c8384a` on white and `#ff8b98` on slate): the same red
 would be unreadable on a dark surface, but a lighter tint of it is still
 recognisably "overdue".
+
+`--dp-on-accent` exists because the accent itself flips lightness between the
+palettes: white on the light theme's accent is 4.9:1, but white on the dark
+theme's lighter accent is only 2.7:1, which fails WCAG AA. Freezing the text
+colour would have left every primary button, every selected subject pill and
+the calendar's "today" ring washed out in dark mode, so the text colour is a
+token too. For the same reason the light-mode semantic hues are darker than
+they look like they need to be: they are read at 11px on a pale tint, where
+4.5:1 is the bar.
 
 `server_code/_constants.URGENCY_COLOURS` was **deleted** in this slice. The
 server's job is to say *which* band an assessment is in; how a band looks is the
