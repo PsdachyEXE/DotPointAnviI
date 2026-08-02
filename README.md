@@ -16,7 +16,8 @@ Post-MVP slices (spec §11–§13): **subject onboarding** — every account loc
 in its VCE studies (≥1 maths, English group guaranteed per the VCAA rule)
 which then drive the editor dropdown, dashboard filter and parser alias
 priority; a deliberate **change-subjects flow** and a **light/dark theme
-picker** in Settings (CSS variables + `body.dotpoint-dark`); and the
+picker** in Settings; a **token-based design system** where every colour and
+size is a CSS variable in `anvil.yaml` and no form hardcodes one (§14); and the
 **VCE 2026 exam timetable** view (official VCAA dates, per-student papers,
 countdown chip + calendar exam markers).
 
@@ -38,8 +39,8 @@ DotPointAnviI/
     ExamsForm/__init__.py        # VCE 2026 written-exam timetable view (§13)
     SettingsForm/__init__.py
     ImportExportForm/__init__.py
-    ParserPreviewForm/__init__.py
-    common/__init__.py    # Shared client-side helpers (top bar, SubjectPicker, theme)
+    common/__init__.py    # Shared client helpers + the UI kit (top bar, cards,
+                          # chips, empty states, toasts, SubjectPicker, theme)
   server_code/            # Server modules (one per concern)
     nlp.py                # Text parser (parse_text, parse_bulk)
     assessments.py        # CRUD + bulk + export/import
