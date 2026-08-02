@@ -748,20 +748,24 @@ native_deps:
       font-weight:700 !important; }
     .modal-content .close { color:var(--dp-muted) !important; opacity:.8; }
     .modal-backdrop.in { opacity:.4; }
-    /* Anvil's default modal buttons follow the secondary/primary language */
-    .modal-footer .btn-default {
+    /* Anvil's dialog buttons follow the app's secondary/primary language.
+       Every alert() button renders identically as .btn-default inside its own
+       .anvil-button wrapper, so 'the affirmative one' cannot be found by class —
+       it is simply the FIRST, because alert(buttons=[...]) renders them in order
+       and this app always lists the affirmative action first. confirm() is the
+       exception: it renders its OK as Bootstrap's green btn-success. */
+    .modal-footer .btn, .modal-footer .btn-default {
       background:var(--dp-btn2-bg) !important; color:var(--dp-btn2-text) !important;
       border:1px solid var(--dp-input-border) !important;
-      border-radius:var(--dp-r-sm) !important; padding:6px 16px !important; }
-    .modal-footer .btn-default:hover { background:var(--dp-btn2-hover) !important; }
-    /* Anvil's confirm() renders its affirmative button as Bootstrap's green
-       btn-success, which is the one control in the app that is not on-brand. */
-    .modal-footer .btn-primary, .modal-footer .btn-success,
-    .modal-footer .btn-default:first-child {
-      background:var(--dp-accent) !important; color:#fff !important;
-      border:1px solid var(--dp-accent) !important; }
-    .modal-footer .btn-primary:hover, .modal-footer .btn-success:hover,
-    .modal-footer .btn-default:first-child:hover {
+      border-radius:var(--dp-r-sm) !important; padding:6px 16px !important;
+      box-shadow:none !important; }
+    .modal-footer .btn:hover { background:var(--dp-btn2-hover) !important; }
+    .anvil-alert-footer-button-panel > .anvil-button:first-child button,
+    .modal-footer .btn-primary, .modal-footer .btn-success {
+      background:var(--dp-accent) !important; color:#ffffff !important;
+      border:1px solid var(--dp-accent) !important; font-weight:600 !important; }
+    .anvil-alert-footer-button-panel > .anvil-button:first-child button:hover,
+    .modal-footer .btn-primary:hover, .modal-footer .btn-success:hover {
       background:var(--dp-accent-hover) !important; }
 
     /* ---------- 14. Toasts ---------- */
