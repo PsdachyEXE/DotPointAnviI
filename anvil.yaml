@@ -767,6 +767,15 @@ native_deps:
     .anvil-alert-footer-button-panel > .anvil-button:first-child button:hover,
     .modal-footer .btn-primary:hover, .modal-footer .btn-success:hover {
       background:var(--dp-accent-hover) !important; }
+    /* ...with one exception. confirm() lists its buttons Cancel-then-OK, the
+       reverse of alert(), and marks its OK as .btn-success. So when the footer
+       already contains a btn-success, the first button is NOT the affirmative one
+       and must stay secondary. */
+    .anvil-alert-footer-button-panel:has(.btn-success) > .anvil-button:first-child button {
+      background:var(--dp-btn2-bg) !important; color:var(--dp-btn2-text) !important;
+      border:1px solid var(--dp-input-border) !important; font-weight:400 !important; }
+    .anvil-alert-footer-button-panel:has(.btn-success) > .anvil-button:first-child button:hover {
+      background:var(--dp-btn2-hover) !important; }
 
     /* ---------- 14. Toasts ---------- */
     /* Anvil Notifications are bootstrap-notify divs fixed at top:20px, i.e.
