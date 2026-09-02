@@ -35,6 +35,23 @@ Both rules live on the server because Anvil publishes every
 boundary, and neither is the UI that normally supplies the arguments. Anything
 the client sends can be anything at all.
 
+THE ONE PATH WITH NO CURRENT USER. Both rules are about callables — everything
+the browser can reach. reminders.run_reminder_check is not one: it is an
+@anvil.server.background_task fired by Anvil's scheduler every 30 minutes
+(FR13), so it runs with no session and there is no current_user for
+_require_user to return. It walks app_tables.users.search() and reads each
+student's assessments with search(user=user), one user at a time, so NFR03's
+real guarantee — no row reaches a user other than its owner — still holds:
+nothing that dispatcher reads is returned to a browser at all. It is named here
+because "every query is scoped to current_user" would otherwise read as a claim
+this file cannot make.
+
+WHY THIS MODULE IMPORTS ALMOST NOTHING. Below the Anvil-managed header at the
+top of the file, `anvil.users` is the only import, and that is deliberate: all
+six modules that define callables (assessments, dashboard, exams, nlp, notes,
+reminders) import this one, so a project dependency of its own would risk an
+import cycle in the module every callable's first line depends on.
+
 See IMPLEMENTATION_SPEC.md section 2 (server_code/_auth.py) and section 5
 (Authentication).
 """

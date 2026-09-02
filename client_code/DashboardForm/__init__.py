@@ -148,10 +148,23 @@ def _cell(dct, day):
     is what fires in the running app; the int branch keeps the helper correct
     for a dict built locally, and costs one dictionary probe.
     """
+    # A missing dict is an ordinary state, not a failure: a month with nothing
+    # in it carries no buckets at all, and every caller already reads None back
+    # as "nothing on this date". Absorbing it here rather than at each call
+    # site is what lets _make_day_cell and _on_day_click write
+    # `_cell(...) or []` and never test the payload themselves.
     if dct is None:
         return None
+    # The int key is probed first because it is the shape the caller actually
+    # holds — `day` comes straight out of a monthcalendar() row — while the
+    # string is only an artefact of how the dict travelled. Ordering them that
+    # way round costs one failed hash probe per cell, about 42 a month.
     if day in dct:
         return dct[day]
+    # Membership-test-then-index above but .get here, for one reason: the
+    # first lookup has to know whether to fall through to this one, while this
+    # one has nothing left to try and so hands back the None the docstring
+    # promises instead of raising KeyError on a day with nothing due.
     return dct.get(str(day))
 
 

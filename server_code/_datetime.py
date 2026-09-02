@@ -4,10 +4,13 @@ import anvil.tables.query as q
 from anvil.tables import app_tables
 """Date/time helpers for user-local time handling.
 
-The Anvil server runs in UTC; all "today" / date-math must be done in the
-user's local timezone, or an assessment due tomorrow in Melbourne reads as due
-today to the server. See IMPLEMENTATION_SPEC.md section 2
-(server_code/_datetime.py).
+The Anvil server runs in UTC, and Melbourne sits 10-11 hours AHEAD of it, so
+through the whole Melbourne morning the server's own date is still yesterday's.
+Every "today" and every piece of date arithmetic therefore has to be done in the
+student's local timezone: measured against the server's date instead, an
+assessment due today in Melbourne reads as due tomorrow, and every days-remaining
+count and urgency band comes out one day too relaxed. See IMPLEMENTATION_SPEC.md
+section 2 (server_code/_datetime.py).
 
 Defines, in the order they appear:
   _get_tz(name)             resolve an IANA name through whichever timezone
@@ -123,9 +126,9 @@ def _user_today(user_settings_row) -> datetime.date:
     from. Takes the same possibly-None settings row as _user_now.
 
     Calling .date() on the timezone-aware datetime yields the LOCAL calendar day,
-    which is the whole reason for going through _user_now — datetime.date.today()
-    on the Anvil server would give the UTC day, and between 11pm and midnight in
-    Melbourne that is tomorrow.
+    which is the whole reason for going through _user_now: datetime.date.today()
+    on the Anvil server would give the UTC day, which through the entire Melbourne
+    morning is still yesterday's.
     """
     return _user_now(user_settings_row).date()
 

@@ -76,12 +76,24 @@ def _days_chip_text(days):
     is days 0, so it is labelled 'today' here; that it is over is carried by
     the urgency band instead, which is what _exam_card colours the row from.
     """
+    # Ordered most-specific-first and returning on the first match, the same
+    # shape FR21's urgency bands use, so the three exceptions are settled
+    # before the general case can claim them.
+    #
+    # 'done', not 'overdue': an exam that has been sat is finished, and the red
+    # "overdue" wording FR09 gives a missed assessment would be telling the
+    # student off for something they cannot act on.
     if days < 0:
         return 'done'
     if days == 0:
         return 'today'
     if days == 1:
         return 'tomorrow'
+    # WORDS, NOT A FORMATTED NUMBER. No single template could produce the four
+    # results above, because 'today' and 'tomorrow' share no stem with 'in N
+    # days' — pluralising an "in %d day(s)" string would still leave both of
+    # them wrong. So only the branch that genuinely counts uses a number, and
+    # its plural is safe to hard-code: days 0 and 1 have already gone.
     return 'in %d days' % days
 
 

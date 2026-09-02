@@ -96,6 +96,11 @@ def band_role(band, prefix):
     stylesheet rule renders as unstyled default Anvil, which looks like a
     layout bug instead of a bad band name.
     """
+    # Two substitutions in one expression, and the order matters: the band is
+    # translated first (this is where the server's 'today' becomes the
+    # stylesheet's 'duetoday'), then the prefix is joined onto the result.
+    # `prefix` itself is never checked, unlike `band` — it is a literal at
+    # every call site, so it cannot be made wrong by data from the server.
     return '%s-%s' % (prefix, _BAND_ROLE.get(band, 'distant'))
 
 
@@ -153,6 +158,12 @@ def fmt_date(d):
     """
     if d is None:
         return 'no date'
+    # MONTHS_ABBR[d.month] is indexed with no bounds check, which looks unsafe
+    # beside from_iso's careful guards but cannot fail: `d` is a real
+    # datetime.date, whose constructor has already rejected any month outside
+    # 1-12. The day is zero-padded and the year deliberately is not — '01'
+    # keeps a column of dates the same width, and a year is four digits
+    # already.
     return '%02d %s %d' % (d.day, MONTHS_ABBR[d.month], d.year)
 
 
@@ -190,7 +201,16 @@ def navigate(hash_value):
     'login', 'onboarding'). An unrecognised value is not an error here: Main
     sends an unknown hash to the dashboard. Returns None.
     """
+    # The hash is written FIRST because Main reads it as it is constructed
+    # (Main.__init__ -> _route_to_current -> anvil.get_url_hash). Reversed,
+    # the router would render the route the student is leaving and the new
+    # hash would sit in the address bar naming a screen that is not on
+    # display — the same symptom as a dropped hashchange, from the other side.
     anvil.set_url_hash(hash_value)
+    # 'Main' as a STRING, not an imported class. Main imports this module for
+    # navigate and get_session_settings, so importing Main back at the top of
+    # common would close the loop; open_form taking a form NAME is what lets
+    # the dependency between the router and the shared helpers run one way.
     open_form('Main')
 
 
@@ -216,9 +236,21 @@ def _sign_out():
 
     Returns None.
     """
+    # No confirm() prompt, unlike the FR05 delete flow. Signing out is undone
+    # by signing back in, so a mis-click costs a password, not data — and a
+    # dialog on the way out would be one more thing between a student on a
+    # shared school machine and an ended session (FR20).
     anvil.users.logout()
+    # Steps 2 and 3 look redundant after logout() — the session is over, so
+    # why clear anything? Because logout() ends the SERVER session and touches
+    # nothing else. Anvil is a single-page app, so the tab is never reloaded
+    # and no page load resets client state for us — and the two things below
+    # both live in the browser rather than in the session: a module-level
+    # dict, and a class on <body>.
     clear_session_settings()
     apply_theme('light')
+    # Last, and only now that there is nothing of the old session left for it
+    # to read: navigate re-enters Main, whose auth gate finds no user.
     navigate('login')
 
 
@@ -310,7 +342,19 @@ def get_session_settings(refresh=False):
     success, so a failed call leaves the old value alone rather than poisoning
     the cache with None.
     """
+    # `is None` is the "never fetched" test, and deliberately not `not
+    # _session['settings']`: None is the exact sentinel clear_session_settings
+    # writes, so only that value means "go and ask the server".
+    #
+    # Note what is NOT inspected — there is no stored user id and no expiry.
+    # This is a single slot holding "the current session's settings", so what
+    # keeps it honest is the two writers either side of it
+    # (set_session_settings after a save, clear_session_settings at sign-in
+    # and sign-out), not anything checked here on the way past.
     if refresh or _session['settings'] is None:
+        # One statement, so a raised AuthenticationFailed never gets as far as
+        # the assignment: the slot keeps its previous value rather than being
+        # left holding a half-answer.
         _session['settings'] = anvil.server.call('get_settings')
     return _session['settings']
 
@@ -542,6 +586,10 @@ def make_list_card(band=None):
     not due on a date, so borrowing the assessment colour language there
     would tell the student something untrue.
     """
+    # The `if band` guard is load-bearing rather than tidiness: band_role()
+    # falls back to 'distant' for anything it does not recognise, so handing
+    # None straight to it would return 'listcard-distant' and quietly paint
+    # every note with the same edge as an assessment that is weeks away.
     role = band_role(band, 'listcard') if band else 'listcard'
     return ColumnPanel(role=role)
 
@@ -573,6 +621,11 @@ def make_page_title(title, subtitle=None):
     """
     panel = ColumnPanel(role='pagehead')
     panel.add_component(Label(text=title, role='pagetitle'))
+    # Guarded rather than always adding a Label that may hold '': an empty
+    # Label still occupies its line, so a screen with no subtitle would carry
+    # a blank strip under its heading and sit lower than every screen that has
+    # one. make_field and make_section_header omit their optional lines the
+    # same way, which is what keeps the vertical rhythm the same across forms.
     if subtitle:
         panel.add_component(Label(text=subtitle, role='caption'))
     return panel
@@ -606,6 +659,12 @@ def make_chip(text, tone=None):
     A Label rather than a Button because a chip is a fact, not a control;
     nothing in this app has a clickable chip.
     """
+    # Tested against None rather than falsiness, because None is a value
+    # callers pass on purpose and not just an omitted argument: DashboardForm
+    # draws its confidence chip with CONF_TONE.get(conf), which yields None
+    # the moment the parser reports anything outside HIGH/MEDIUM/LOW (FR17).
+    # A neutral grey chip is the right answer to that — a 'chip-None' role
+    # has no stylesheet rule, so it would render as unstyled Anvil default.
     role = 'chip' if tone is None else 'chip-%s' % tone
     return Label(text=text, role=role)
 

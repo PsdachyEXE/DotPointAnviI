@@ -60,16 +60,16 @@ Every rule the rubric names is represented:
   reasonable/ -> require_not_after, require_within_horizon, require_complete_record
   completeness
 
-round_percentage is the odd name in that list: it never raises, because it is a
-NORMALISER rather than a check — it runs immediately after the range check to fix
-the number of decimal places. It is grouped with the require_* family because it
-belongs to the write path, and putting it there is what stops the stored weight
-and the displayed weight ever disagreeing.
-
 and every column read back out of a table has a degrading twin:
   safe_text, safe_bool, safe_number, safe_choice, safe_list, safe_date,
   safe_timezone, plus the element predicates safe_list takes — is_positive_int
   and is_valid_reminder_day.
+
+One name in the first list is not really a check: round_percentage never raises,
+because it is a NORMALISER — it runs immediately after the range check to fix the
+number of decimal places. It sits with the require_* family because it belongs to
+the write path, and running it there, once, is what stops the stored weight and
+the displayed weight ever disagreeing.
 
 MESSAGE STYLE (applies to every string in this file)
 ----------------------------------------------------
@@ -200,7 +200,12 @@ def require_number(value, field_label):
 
 
 def require_number_in_range(value, field_label, minimum, maximum):
-    """Type + range check: a number, and inside [minimum, maximum] inclusive."""
+    """Type + range check: a number, and inside [minimum, maximum] inclusive.
+
+    Returns the float require_number produced, so a caller that wrote a numeric
+    string gets the number back and never re-parses it. The bounds are the
+    caller's: MIN_WEIGHT/MAX_WEIGHT (0-100) is the only pair in use today.
+    """
     number = require_number(value, field_label)
     if not (minimum <= number <= maximum):
         # %g keeps the bounds readable — "0 and 100", not "0.0 and 100.0".
@@ -247,8 +252,15 @@ def require_list(value, field_label, allow_empty=True):
     of a database row, so there is no shared Anvil cell to protect, and every
     caller goes on to iterate or rebuild it anyway.
     """
+    # The list test is STRICT, and refusing a tuple or a string is the point.
+    # Every caller iterates what comes back, and a string is iterable, so a
+    # bare 'sac' would otherwise be accepted and then read as the three tags
+    # 's', 'a', 'c' with no error raised anywhere. Rejecting the shape once,
+    # here, is what closes that off for all nine call sites at the same time.
     if not isinstance(value, list):
         raise ValueError('%s must be a list of values.' % field_label)
+    # Shape before emptiness, so a None or a 7 leaves through the message above
+    # rather than the misleading "cannot be empty".
     if not value and not allow_empty:
         raise ValueError('%s cannot be empty.' % field_label)
     return value
@@ -406,8 +418,17 @@ def require_not_after(earlier, later, earlier_label, later_label):
     exception: assessments.py compares start_date with due_date, and
     notes._validate_school_terms compares each term's own two dates.
     """
+    # The two callers need this guard very differently. assessments.py passes
+    # an OPTIONAL start_date beside a required due date (FR03's field list has
+    # no start date at all), so without the early return every assessment saved
+    # without one would be refused. notes._validate_school_terms has already
+    # put both its dates through require_iso_date_text, so neither can be None
+    # and this arm never fires there.
     if earlier is None or later is None:
         return
+    # `>` rather than `>=`, so two EQUAL dates pass: an assessment set and due
+    # on the same day is ordinary, and tests/test_validation.py pins that case
+    # down. Only a genuine inversion is worth stopping the student for.
     if earlier > later:
         raise ValueError(
             '%s cannot be after %s. Check the two dates.'

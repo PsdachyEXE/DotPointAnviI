@@ -383,14 +383,31 @@ class SettingsForm(ColumnPanel):
         card = make_card()
         card.add_component(make_section_header('My subjects'))
 
+        # The panel goes into the tree EMPTY and stays that way until
+        # _load_settings has a list to hand _render_subject_chips. Building the
+        # card cannot wait on a round trip — every other card on this page is
+        # drawn before get_settings answers — and an empty panel is the honest
+        # picture while the answer is still unknown. self._subjects is [] at
+        # this point, so rendering here would draw the "no subjects locked in"
+        # empty state for a student who has five.
         self._subjects_panel = ColumnPanel()
         card.add_component(self._subjects_panel)
 
+        # Says what a subject change actually costs, because none of it is
+        # visible from this page: dropping a study silently narrows what the
+        # parser will recognise (FR16), what the dashboard filter offers (FR06)
+        # and which papers the exam timetable lists.
         card.add_component(Label(
             text='Subjects drive the parser, the dashboard filter and the exam '
                  'timetable.',
             role='micro'))
 
+        # 'secondary' and the trailing ellipsis both say the same thing — this
+        # opens a picker and confirms, it does not commit on the spot. It is
+        # also NOT the page's Save: _on_change_subjects calls set_subjects
+        # itself, which is why nothing on this card is read by _on_save_click.
+        # make_row keeps the button its own width instead of stretching it
+        # across the card like a primary action.
         change_btn = Button(text='Change subjects…', role='secondary')
         change_btn.set_event_handler('click', self._on_change_subjects)
         card.add_component(make_row(change_btn))
@@ -809,12 +826,29 @@ class SettingsForm(ColumnPanel):
         server's message for it is already a sentence, which _on_save_click puts
         under this field.
         """
+        # `or ''` because an Anvil TextBox that has never been typed in reads
+        # None, not '', and .strip() would raise on it. Stripping then means a
+        # box holding only spaces counts as cleared, which is what it is.
         year_text = (self._school_year_tb.text or '').strip()
+        # RETURNS (ok, value), AND A CLEARED BOX IS ok=True WITH value None —
+        # not a refusal. school_year is nullable, so erasing it is how the
+        # student says "I have not set one", and _on_save_click sends that None
+        # to unset the column. It follows that a caller must branch on ok and
+        # never on the value: None is a real answer here, not a failure signal.
         if not year_text:
             return True, None
         try:
+            # int() IS the check — no isdigit() first. The conversion has to
+            # happen either way, and the two are not equivalent (isdigit is
+            # true for digit characters int also accepts, and false for the
+            # '+2026' it accepts too), so testing twice would only be a
+            # second rule to keep in step with the first.
             return True, int(year_text)
         except ValueError:
+            # The value is dropped rather than passed on as text: a caller that
+            # forgot to check ok would otherwise send 'twenty twenty six' to a
+            # server column typed as a number. The message names a real year
+            # because "must be a whole number" alone does not say which one.
             set_field_error(self._school_year_field,
                             'School year must be a whole number, like 2026.')
             return False, None
@@ -828,6 +862,11 @@ class SettingsForm(ColumnPanel):
         field by _on_save_click.
         """
         timezone_name = self._timezone_dd.selected_value
+        # Same (ok, value) contract as _read_school_year, but the OPPOSITE
+        # verdict on blank: a cleared year means "not set yet", whereas there is
+        # no such thing as "no timezone" — every days-remaining (FR09) and every
+        # reminder tick (FR13) is worked out in it, so saving nothing would just
+        # hand the student the app default under the impression they had chosen.
         if not timezone_name:
             set_field_error(
                 self._timezone_field,

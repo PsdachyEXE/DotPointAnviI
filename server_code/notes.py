@@ -41,7 +41,11 @@ user_settings row (via _get_or_create_settings).
 
 Every @anvil.server.callable below calls _require_user() first, and every one
 that fetches a row by id calls _own_or_raise() straight after, so no row ever
-reaches a user who does not own it (NFR03).
+reaches a user who does not own it (NFR03). The two exceptions are surface 4's
+create_account and sign_in_with_email, which cannot demand a signed-in user
+because they are how somebody becomes one; _auth's own docstring names them as
+the app's only two documented exemptions, and neither takes a row id nor reads
+a user-owned table.
 
 See IMPLEMENTATION_SPEC.md section 2 (server_code/notes.py) and section 1
 (user_settings table + uniqueness mandate).
@@ -74,6 +78,14 @@ from ._validation import (
 # applied yet (auto_create_missing_columns is off), which would break signup
 # itself. An unset column reads back as None, which _row_value already treats
 # as "not onboarded" — so the OnboardingForm gate works either way.
+#
+# KNOWN SPEC DIFFERENCE: 'theme' is 'light' here, where the §1 user_settings
+# table gives the column a default of 'dark'. The code is at least consistent
+# with itself — this value and _DEFAULT_THEME (the read guard's fallback) are
+# the same 'light', so a new account and a damaged cell land on one theme — and
+# §12's Settings switch changes it either way. Written down rather than left
+# silent, since an undocumented split between spec and code is exactly what
+# 7.3's "no inconsistencies" is looking for.
 _SETTINGS_DEFAULTS = {
     'theme': 'light',
     'default_reminder_days': [7, 2],
@@ -498,8 +510,8 @@ def get_subject_catalog() -> list:
     """The picker catalog: [{'group': <area>, 'subjects': [<canonical>, ...]}, ...].
 
     Takes nothing and touches no table — SUBJECT_GROUPS is a module constant in
-    _constants, transcribed from the VCAA study designs. Returns the ~46
-    studies grouped by learning area, in display order, which is what
+    _constants, transcribed from the VCAA study designs. Returns all 56
+    studies in 10 learning areas, in display order, which is what
     common.SubjectPicker draws its grouped checkboxes from.
 
     _require_user() is still called and its result still thrown away: this is
@@ -712,18 +724,65 @@ def _validate_settings(fields: dict) -> dict:
 
 
 def _validate_school_terms(terms) -> list:
-    """Validate the school-terms list; return it normalised, or raise."""
+    """Validate the school-terms list; return it normalised, or raise.
+
+    The write-side twin of _safe_school_terms, and the most consequential
+    validator in this module, because school_terms is the ONLY stored value a
+    student is ever told to type by hand and the only one another module
+    silently depends on. nlp._try_parse_week_phrase resolves "Term 2 Week 5"
+    (FR15) by counting weeks forward from `start_date` and then testing
+    start <= due <= end, so a term that is merely well-FORMED but not sensible
+    breaks FR15 with no error raised anywhere and nothing shown to the student.
+    This function is the only place that can be caught and reported.
+
+    `terms` is the raw list from the Settings screen (or from an import). Each
+    element must be a dict carrying:
+
+        term        int, MIN_TERM_NUMBER..MAX_TERM_NUMBER (1-4 — the Victorian
+                    school year has exactly four)
+        start_date  'YYYY-MM-DD' text, or the 'start' alias
+        end_date    'YYYY-MM-DD' text, or the 'end' alias
+
+    BOTH KEY SPELLINGS ARE ACCEPTED because the documents disagree: this
+    module, nlp and the Settings screen all read start_date / end_date, while
+    SAT 5 §4.2.3 documents the same two fields as start / end.
+    _normalise_term_keys folds the aliases onto the canonical names rather than
+    rejecting one spelling, so a hand-authored or document-conformant list
+    imports instead of failing a format check whose cause the student cannot
+    see.
+
+    Returns a NEW list of dicts with exactly the three canonical keys, dates
+    still as 'YYYY-MM-DD' TEXT — that is the shape §1 specifies for the
+    simpleObject column, and the shape nlp expects to read back. Raises
+    ValueError, with a student-facing sentence naming the term at fault, on the
+    first problem found.
+    """
     require_list(terms, 'School terms')
 
+    # PASS 1 — per-entry checks: shape, term number, and the two dates. `clean`
+    # collects the normalised entries so the whole-value checks below can work
+    # on validated data instead of re-testing types.
     clean = []
     for index, raw in enumerate(terms):
+        # Reported by POSITION, not by term number: a non-dict entry has no
+        # term number to name it with, so 1-based `index + 1` is the only
+        # handle the student has on which row of the Settings grid is wrong.
         if not isinstance(raw, dict):
             raise ValueError(
                 'Each school term needs a term number and two dates — '
                 'entry %d does not.' % (index + 1))
+        # Aliases folded FIRST, so the three .get() calls below only have to
+        # know one spelling each.
         term = _normalise_term_keys(raw)
+        # The number is validated BEFORE the dates because it is what the two
+        # date messages are labelled with: getting it first means the student
+        # is told "Term 2 start date", not "entry 3's start date".
         number = require_int_in_range(
             term.get('term'), 'Term number', MIN_TERM_NUMBER, MAX_TERM_NUMBER)
+        # require_iso_date_text, not require_date: this value must STAY a
+        # 'YYYY-MM-DD' string. A real date object in a simpleObject column
+        # would be serialised by Anvil however it pleased, and nlp reads these
+        # back expecting text.
         clean.append({
             'term': number,
             'start_date': require_iso_date_text(
@@ -745,6 +804,13 @@ def _validate_school_terms(terms) -> list:
     # term unresolvable — with no error raised anywhere, no message to the
     # student, and FR15 simply not working. Catching it on the way in is the
     # only place it can be reported to someone who can fix it.
+
+    # CHECK 1 — ORDERING. Each term must not end before it starts. Parsed back
+    # out of the stored text with fromisoformat, which is safe without a
+    # try/except only because require_iso_date_text above has already proved
+    # every value is a real 'YYYY-MM-DD' date. Routed through the shared
+    # require_not_after so a backwards school term and a backwards assessment
+    # window read the same to the student.
     for term in clean:
         require_not_after(
             datetime.date.fromisoformat(term['start_date']),
@@ -752,6 +818,12 @@ def _validate_school_terms(terms) -> list:
             'Term %d start date' % term['term'],
             'Term %d end date' % term['term'])
 
+    # CHECK 2 — UNIQUENESS. nlp looks a term up by NUMBER and takes the first
+    # match, so two entries both calling themselves Term 2 make "Term 2 Week 5"
+    # resolve against whichever happens to be stored first — a coin toss the
+    # student never sees. `seen_numbers` is a set purely for the O(1)
+    # membership test; the message names the number rather than the position,
+    # because that is what the student typed twice.
     seen_numbers = set()
     for term in clean:
         if term['term'] in seen_numbers:
@@ -760,17 +832,31 @@ def _validate_school_terms(terms) -> list:
                 'dates.' % term['term'])
         seen_numbers.add(term['term'])
 
-    # Overlap. 'YYYY-MM-DD' strings sort chronologically, and require_iso_date_text
+    # CHECK 3 — OVERLAP. Two terms claiming the same weeks means a date in the
+    # shared stretch belongs to both, and week counting from either start
+    # answers differently for the same phrase.
+    #
+    # 'YYYY-MM-DD' strings sort chronologically, and require_iso_date_text
     # above guarantees every value is in that exact shape, so sorting the strings
-    # is the same as sorting the dates.
+    # is the same as sorting the dates — no parsing needed, and no risk of the
+    # sort and the comparison below disagreeing about what a date is.
     ordered = sorted(clean, key=lambda t: t['start_date'])
+    # Comparing only ADJACENT pairs is enough once the list is sorted by start
+    # date: if any two terms overlap at all, then some neighbouring pair in
+    # this order does too, so a single pass finds it. `ordered` is a separate
+    # sorted copy, so the returned list keeps the order the student entered.
     for earlier, later in zip(ordered, ordered[1:]):
+        # <= not <, because the dates are INCLUSIVE bounds — nlp tests
+        # start <= due <= end — so a term starting on the day the previous one
+        # ends really does share that day.
         if later['start_date'] <= earlier['end_date']:
             raise ValueError(
                 'Term %d and Term %d overlap. School terms cannot share dates — '
                 'check their start and end dates.'
                 % (earlier['term'], later['term']))
 
+    # `clean`, not `ordered`: the entries are returned in the order they were
+    # given, so the Settings grid redraws the rows where the student put them.
     return clean
 
 
@@ -855,6 +941,7 @@ def _note_row_to_dict(row) -> dict:
     survives the trip unambiguously.
     """
     def iso(stored):
+        """One timestamp cell as an ISO string, or None if it is unreadable."""
         # A guard, not a formatter: .isoformat() on a cell that holds a string
         # raises AttributeError, and this runs once per note in the list.
         #
@@ -981,7 +1068,7 @@ def create_note(record: dict) -> str:
     """
     user = _require_user()
     # `record or {}` covers a client that sends None for an empty form; the
-    # .get() calls below then all answer None instead of raising AttributeError.
+    # .get() calls below then answer None rather than raising AttributeError.
     record = record or {}
     # Every field is named explicitly rather than the dict being passed
     # through, so a hand-made call cannot smuggle in a column the student is
@@ -1188,18 +1275,19 @@ def search_notes(query: str = None, tag: str = None, pinned_only: bool = False) 
         query, 'Search', MAX_TITLE_LENGTH, allow_blank=True).lower()
     want = require_text(tag, 'Tag', MAX_TAG_LENGTH, allow_blank=True).lower()
     # bool(), not require_bool: this is a display flag that is never stored, so
-    # a truthy value from a checkbox is a perfectly clear intention. require_bool
+    # a truthy value from a checkbox is a clear enough intention. require_bool
     # is reserved for values that reach a column, where a loose type would
     # outlive the request.
     pinned_only = bool(pinned_only)
 
     # user=user is the NFR03 scoping — the query itself can only return this
     # student's notes, so nothing below needs a second ownership test.
-    # list() materialises it because Anvil hands back a lazy search iterator and
+    # list() materialises it because Anvil returns a lazy search iterator and
     # .sort() needs a real list to sort in place.
     rows = list(app_tables.notes.search(user=user))
 
     def _sort_key(r):
+        """Sort position for one note row: (unpinned?, negated timestamp)."""
         # This key runs for every note, so it uses the safe_* family: a timestamp
         # cell that is not a datetime would otherwise raise AttributeError here and
         # take the whole Notes screen down instead of mis-sorting one row.
@@ -1389,6 +1477,6 @@ def sign_in_with_email(email: str, password: str) -> bool:
     # The reason this function is not just the login call. An account can
     # predate the user_settings table, or have been added through the Anvil
     # Users console, and Main's router reads settings on the very first
-    # navigation — so the row is guaranteed here rather than left to fail later.
+    # navigation, so the row is guaranteed here rather than left to fail late.
     _get_or_create_settings(user)
     return True

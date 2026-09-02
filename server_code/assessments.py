@@ -269,7 +269,8 @@ def _validate_assessment_payload(record: dict, user, today=None) -> dict:
         require_choice(confidence, VALID_CONFIDENCE, 'Confidence')
         if confidence is not None else None)
 
-    # 13. The parser's audit trail. Both are trimmed rather than refused — see
+    # 13. The parser's audit trail — type check, then a length cap applied by
+    #     trimming instead of by refusing. Both are trimmed, not raised — see
     #     _trim_parser_text. source_text is NOT in EDITABLE_FIELDS_ASSESSMENT, so
     #     this is the only place it is ever written; term_info is editable,
     #     because the student may need to correct a term phrase the parser
@@ -395,8 +396,11 @@ def _row_to_dict(row) -> dict:
     wrong: it may predate a rule, or have been typed straight into the Anvil Data
     Tables console, which bypasses every validator in this file. reminder_days and
     linked_note_ids are simpleObject columns, which accept ANY JSON at all. This
-    dict feeds the dashboard, the export file and the reminder emails, so one
-    damaged cell has to degrade to a documented default, not take a screen down.
+    dict feeds the dashboard (dashboard.py imports it), the editor form and the
+    export file, so one damaged cell has to degrade to a documented default
+    rather than take a whole screen down. The reminder emails do NOT come
+    through here — reminders.py reads its rows directly and applies the same
+    safe_* guards itself, so it has no dependency on this module.
 
     row  a live `assessments` row. Returns a dict with the keys listed below;
     never raises.
@@ -466,8 +470,11 @@ def _decorate(d: dict, today: datetime.date) -> dict:
     The second half of the database-to-client boundary: _row_to_dict says what is
     STORED, this says what is SHOWN. The three fields are computed server-side on
     purpose — days_remaining is FR09, urgency_band is the colour rule of FR21, and
-    due_display is the fixed 'DD MMM YYYY' of NFR08 — so every screen and the
-    reminder emails agree, and nothing depends on the browser's locale or clock.
+    due_display is the fixed 'DD MMM YYYY' of NFR08 — so nothing on screen
+    depends on the browser's locale or clock. Every screen in the app is fed
+    from here; the reminder emails build their own text but reach for the same
+    _datetime helpers (_user_today, _format_date_au), which is what keeps a
+    date in an email and the same date on a card reading identically.
 
     d      an assessment dict from _row_to_dict. MUTATED IN PLACE and also
            returned, so it can be used inside a comprehension.
@@ -1079,8 +1086,16 @@ def _validate_import_payload(data: dict):
     deferred_link_owner = None
     horizon_today = None
     for i, a in enumerate(data['assessments']):
+        # A COPY of the record, because the links are about to be emptied and
+        # doing that in place would edit the caller's own `data` structure.
         rec = dict(a)
         old_links = rec.get('linked_note_ids') or []
+        # Emptied BEFORE validation, not after. Step 11 of the payload validator
+        # looks each linked id up in the notes table and checks its owner, and
+        # these ids name the OLD note rows from the file: they may not exist,
+        # and if they do exist they are somebody else's. Setting [] is also what
+        # makes deferred_link_owner=None safe — the loop that would have used it
+        # now has nothing to iterate over.
         rec['linked_note_ids'] = []
         try:
             payload = _validate_assessment_payload(
@@ -1088,6 +1103,8 @@ def _validate_import_payload(data: dict):
         except ValueError as e:
             raise ValueError(
                 'Assessment %d in that file could not be imported. %s' % (i + 1, e))
+        # Paired the same way the notes were: the payload is ready to write, and
+        # the old link ids travel with it until there are new ids to map onto.
         validated_assessments.append((payload, old_links))
 
     return validated_notes, validated_assessments
@@ -1102,8 +1119,30 @@ def import_user_data(blob) -> dict:
     inside one Transaction: notes first (building an old-id -> new-id map), then
     assessments with their linked_note_ids remapped. Title collisions for the
     user are suffixed with the import timestamp. Settings are applied best-effort.
+
+    The restore is ADDITIVE and never destructive: nothing already in the account
+    is overwritten or deleted, which is why a title collision is renamed rather
+    than replaced. Importing the same file twice therefore leaves two copies —
+    annoying but recoverable, where a silent overwrite would not be.
+
+    blob  an anvil.Media from the client's FileLoader: the .json file
+          export_user_data wrote. Its bytes must decode as UTF-8 and parse as
+          the shape _validate_import_payload describes.
+
+    Returns {'notes_inserted': int, 'assessments_inserted': int, 'renamed':
+    list[str]}, where 'renamed' holds the NEW titles of the assessments that
+    collided so the client can name them for the student. Writes to `notes` and
+    `assessments`, and updates `user_settings`. Note that `subjects` is NOT
+    restored: notes.update_settings whitelists it out, because set_subjects is
+    its only writer, so a student importing into a fresh account still picks his
+    studies through onboarding. Raises AuthenticationFailed if nobody is signed
+    in, and ValueError if the file cannot be read or any row in it is invalid.
     """
     user = _require_user()
+    # 1. Decode and parse under ONE try, because a file that is not UTF-8 and a
+    #    file that is not JSON are the same mistake to the student — he picked
+    #    the wrong file — and the message says how to fix that rather than
+    #    reporting a codec or a parse position.
     try:
         raw = blob.get_bytes().decode('utf-8')
         data = json.loads(raw)
@@ -1112,37 +1151,82 @@ def import_user_data(blob) -> dict:
             'That file could not be read. Choose the .json file you downloaded '
             'from Export.')
 
+    # 2. Validate EVERY row before writing ANY row (FR19). This raises on the
+    #    first bad row, so the transaction below is only ever reached with data
+    #    already known to be good: the write loops contain no validation and
+    #    have no half-written state to unwind.
     validated_notes, validated_assessments = _validate_import_payload(data)
 
+    # 3. One timestamp for the whole restore. Everything imported in a single
+    #    action shares a created_at, so the batch sorts together in the list,
+    #    and the same instant formats the collision suffix below. It is the time
+    #    of the IMPORT, not the original creation time recorded in the file:
+    #    those are the old account's audit stamps and are not trusted here.
     now = datetime.datetime.now(datetime.timezone.utc)
+    # Minutes, not seconds. A person reads this suffix to decide which of two
+    # copies to keep, and it has to fit on the end of a title.
     stamp = now.strftime('%Y-%m-%d %H:%M')
+    # old note id (as written in the file) -> new Anvil row id (just inserted).
     id_map = {}
+    # The NEW titles of the renamed assessments, reported back to the client.
     renamed = []
 
+    # 4. Every insert inside ONE transaction, so a failure part-way through
+    #    leaves the account exactly as it was rather than half-restored. It is
+    #    also what makes the id map trustworthy: the notes and the assessments
+    #    that link to them either commit together or not at all.
     with tables.Transaction():
+        # 4a. Notes first, because the assessment links point AT them. `user` is
+        #     stamped from the session rather than read from the file, so
+        #     importing an export makes the rows the CALLER'S own (NFR03) —
+        #     which is what lets a student restore into a new account.
         for old_id, clean in validated_notes:
             row = app_tables.notes.add_row(
                 title=clean['title'], content=clean['content'], tags=clean['tags'],
                 is_pinned=clean['is_pinned'], user=user, created_at=now, updated_at=now)
+            # Mapped only when the file actually supplied an id. A note without
+            # one still imports; nothing can link to it, which is the honest
+            # result rather than a guess at which note was meant.
             if old_id:
                 id_map[old_id] = row.get_id()
 
         for payload, old_links in validated_assessments:
+            # 4b. Collision check, scoped to this user's own titles. Restoring a
+            #     backup on top of live data must not leave two identical-looking
+            #     cards with no way to tell which is which.
             existing = app_tables.assessments.search(user=user, title=payload['title'])
+            # any(True for _ in existing) rather than len(list(...)): the search
+            # is lazy, and this only needs to know whether there is at LEAST one
+            # hit, so it stops at the first row instead of fetching them all.
             if any(True for _ in existing):
                 payload['title'] = '%s (imported %s)' % (payload['title'], stamp)
+                # The new title is what is recorded, because that is the one the
+                # student will be looking for in the list afterwards.
                 renamed.append(payload['title'])
+            # 4c. Remap the links onto the ids just written. `if o in id_map`
+            #     DROPS any link whose note was not in this file: the old id
+            #     names a row in another database, and keeping it would leave a
+            #     link pointing at a stranger's note or at nothing (NFR03).
             payload['linked_note_ids'] = [id_map[o] for o in old_links if o in id_map]
             payload['user'] = user
             payload['created_at'] = now
             payload['updated_at'] = now
             app_tables.assessments.add_row(**payload)
 
+    # 5. Settings last, OUTSIDE the transaction and best-effort. They are a
+    #    preference rather than data: a theme or timezone that cannot be applied
+    #    must not roll back a restore of the assessments and notes, which are
+    #    the things the student actually came here for. _apply_settings is
+    #    notes.update_settings, which whitelists and validates the dict itself,
+    #    so a hand-edited 'settings' block cannot write a column it may not.
     try:
         _apply_settings(data['settings'])   # whitelisted + validated inside notes
     except Exception:
         pass
 
+    # 6. Counted from the VALIDATED lists rather than from rows written back.
+    #    That is only honest because the transaction is all-or-nothing: reaching
+    #    this line at all means every one of them committed.
     return {
         'notes_inserted': len(validated_notes),
         'assessments_inserted': len(validated_assessments),

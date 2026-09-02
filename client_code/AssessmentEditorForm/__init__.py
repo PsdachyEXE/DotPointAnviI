@@ -426,12 +426,28 @@ class AssessmentEditorForm(ColumnPanel):
         uneditable — opening one would show a different subject and saving
         would write that back.
         """
+        # "No subject" is an ordinary outcome, not a fault: a create opens with
+        # nothing chosen and FR16 lets an unrecognised alias through the parser
+        # unchanged, so _load deliberately calls with None. Returning leaves
+        # the dropdown on its blank placeholder; falling through would not,
+        # because selected_value None and '' do not behave the same here.
         if not subject:
             return
+        # THE MEMBERSHIP TEST IS THE POINT OF THIS FUNCTION. A DropDown given
+        # selected_value its items do not contain does not refuse it and does
+        # not go blank — it keeps showing its FIRST item, and _build_payload
+        # reads that item straight back on Save. That is exactly how a stored
+        # off-enum type or status used to be silently rewritten by opening a
+        # record and pressing Save; subject never had the bug because of these
+        # three lines, and _select_choice is that same defence for the rest.
         items = list(self._subject_dd.items)
         if subject not in items:
             items.append(subject)
+            # Reassigned, not appended in place: Anvil repaints a DropDown when
+            # .items is set, so mutating the live list would leave the widget
+            # unaware of the new option and the selection below would miss it.
             self._subject_dd.items = items
+        # Only now, with the value certain to be in the list, is it selected.
         self._subject_dd.selected_value = subject
 
     def _select_choice(self, dropdown, field_panel, stored, allowed, field_label):
@@ -961,13 +977,31 @@ class AssessmentEditorForm(ColumnPanel):
         and an assessment must still be editable when the notes table is not
         reachable.
         """
+        # Guard first, because the common case is no links at all: create mode
+        # and most edits have an empty list, and this saves them a whole
+        # round-trip on the way to a dialog that is trying to open (NFR01).
         if not self._linked_note_ids:
             return
         try:
+            # The cache is keyed by note id and filled from EVERY note the
+            # student owns, not just the linked ones — search_notes is already
+            # scoped to current_user (NFR03), so the extra rows cost nothing to
+            # trust and mean a note linked later by _add_link is already named.
             for n in anvil.server.call('search_notes'):
+                # A note saved with an empty title is a real note the student
+                # can still open, so it gets a visible stand-in rather than a
+                # blank pill that looks like a rendering fault.
                 self._note_titles[n['id']] = n.get('title') or '(untitled)'
         except Exception:
             pass
+        # AN ID WHOSE NOTE IS GONE IS HANDLED BY DOING NOTHING. delete_note
+        # unlinks the back-references as it deletes (FR12), so normally no such
+        # id survives — but this form read linked_note_ids at _load, and a note
+        # deleted in another tab in the moment since then is still in the list
+        # and in no search result. It therefore gets no cache entry at all,
+        # which is precisely what _render_links' .get(nid, nid) fallback is
+        # for: the pill shows the raw id, and its x is how the student clears
+        # the dead reference off the row on the next Save.
 
     def _render_links(self):
         """Redraw the row of attached-note pills from _linked_note_ids.

@@ -649,12 +649,16 @@ def get_exam_timetable() -> dict:
     #    exam for this" and "DotPoint has no data for this" must never reach the
     #    student as the same sentence.
     #
-    #    The test is membership of EXAM_TIMETABLE_2026, not "did this subject
-    #    contribute a row to `exams`". They differ for a subject whose only
-    #    timetable row failed safe_date, and membership is the answer that keeps
-    #    that subject reported as covered instead of mislabelled a gap in the
-    #    data — the transcription is present, it is just unreadable, and the
-    #    skipped-row comment in _build_exams_for_subjects owns that case.
+    #    The test is membership of EXAM_TIMETABLE_2026, NOT "did this subject
+    #    contribute a row to `exams`". For every subject in the table as it
+    #    stands the two are the same answer, because all 58 transcribed rows
+    #    parse. They would come apart only for a subject whose every row failed
+    #    safe_date — a future typo in the table. Such a subject would produce no
+    #    exam row AND would not be in `uncovered`, so it would appear in none of
+    #    the three lists rather than being named in one of them. Membership is
+    #    still the right test to use here (the subject genuinely IS covered by
+    #    this file), but the honest reading is that a typo in a subject's only
+    #    row makes it quietly absent from the page rather than flagged on it.
     uncovered = [s for s in subjects if s not in EXAM_TIMETABLE_2026]
     return {
         'today': today.isoformat(),

@@ -664,8 +664,16 @@ def _extract_date(text: str, today: datetime.date, settings_row):
                 d = _safe_date(today.year + 1, month, day) or d
             return d, 'matched "%s" → %s' % (m.group(0), d.strftime('%d %b %Y')), week_phrase_text, m.group(0)
 
-    # 7. dateparser fallback (optional dependency).
+    # 7. dateparser fallback (optional dependency, spec section 7): free-form
+    #    English the rules above do not cover, such as "end of next month".
+    #    PREFER_DATES_FROM='future' because an assessment is always ahead of
+    #    the student, and RELATIVE_BASE pins the library's idea of "now" to the
+    #    student's local today rather than the server's clock.
     if _dateparser is not None:
+        # A BARE except, which is normally wrong, is right here: this is a
+        # third-party library given arbitrary student text, its exception types
+        # are not part of its documented contract, and the correct answer for
+        # any failure is the same — no date, keep the rest of the parse.
         try:
             parsed = _dateparser.parse(
                 text,
@@ -675,8 +683,16 @@ def _extract_date(text: str, today: datetime.date, settings_row):
             parsed = None
         if parsed is not None:
             d = parsed.date()
+            # The 'why' is hedged ('interpreted' rather than 'matched ...') and
+            # matched_text is None, because the library read the whole sentence
+            # and cannot report which words it used. That None means step 7
+            # strips nothing from the title — the safe direction, since guessing
+            # a span could delete words the student wanted to keep.
             return d, 'interpreted the date as %s' % d.strftime('%d %b %Y'), week_phrase_text, None
 
+    # Nothing matched. term_info is still returned: an unresolvable "term 2
+    # week 4" is recorded verbatim so the student can see what they typed
+    # beside the empty date field (FR15).
     return None, None, week_phrase_text, None
 
 
@@ -700,7 +716,14 @@ def _safe_date(year, month, day):
 # --- title -----------------------------------------------------------------
 
 def _find_week_phrase_text(text: str):
-    """The literal 'week N' / 'term N week M' phrase in text, or None."""
+    """The literal 'week N' / 'term N week M' phrase in text, or None.
+
+    A SEPARATE, looser pattern from the one _try_parse_week_phrase resolves
+    with, and only _extract_title uses it. Its job is removal, not resolution,
+    so it accepts a bare 'week 5' with no term in front of it — those words
+    belong to the due date and must not survive into the title, whether or not
+    school_terms could turn them into an actual date.
+    """
     m = re.search(r'(?:term\s*\d\s*)?week\s*\d+', text, re.IGNORECASE)
     return m.group(0) if m else None
 
@@ -708,13 +731,34 @@ def _find_week_phrase_text(text: str):
 def _extract_title(raw: str, matched_spans: list) -> str:
     """Residual title after removing date/weight/week spans, filler and orphans.
 
+    `raw` is the original sentence. `matched_spans` is a list of literal
+    substrings the other matchers consumed (any of them may be None, which is
+    skipped). Returns a string of at most MAX_TITLE_LENGTH chars. It produces a
+    title for any input with a word in it, which is why 'title' is not one of
+    the fields the confidence score counts.
+
     Subject and type words are intentionally kept — for a fully-structured input
     like 'Methods SAC2 ...' they form the natural title 'Methods SAC2'.
+
+    SUBTRACTIVE rather than constructive: it is easier to say which words are
+    definitely NOT part of a title than to say which are. Whatever the student
+    wrote that no rule claimed is assumed to be what they were calling the task.
     """
+    # 1. Delete the spans the date and weight matchers already consumed.
+    #    re.escape because a span is literal student text that may contain
+    #    regex characters (the '/' and '.' in "12/03" are harmless, but a '%'
+    #    or '+' in a future span would not be). Replaced with a SPACE, not '',
+    #    so cutting from the middle of "SAC2due" style input cannot fuse two
+    #    words together. IGNORECASE because some spans were matched against a
+    #    lowercased copy and so may not match `raw`'s own casing.
     residual = raw
     for span in matched_spans:
         if span:
             residual = re.sub(re.escape(span), ' ', residual, flags=re.IGNORECASE)
+    # 2. Walk what is left word by word, keeping the ORIGINAL casing of each
+    #    kept word while testing a lowercased, de-punctuated copy. That is why
+    #    `w` is appended and `cw` is only ever compared: the student's "Methods
+    #    SAC2" must come back capitalised as they wrote it.
     kept = []
     for w in re.split(r'\s+', residual):
         if not w:
@@ -722,10 +766,17 @@ def _extract_title(raw: str, matched_spans: list) -> str:
         cw = w.lower().strip('.,;:!?%')
         if not cw or cw in _TITLE_FILLER:
             continue
+        # A word that is now nothing but digits is an orphan left behind by a
+        # partial removal — "week 5" loses "week" to _TITLE_FILLER and would
+        # otherwise leave a bare "5" sitting in the title.
         if re.fullmatch(r'\d+', cw):   # drop orphaned numbers (e.g. leftover 'week 5')
             continue
         kept.append(w)
     title = ' '.join(kept).strip(' .,;:-')
+    # 3. Everything can be stripped away — "due friday" is entirely filler and
+    #    date. An empty title would be useless in the list view, so the raw
+    #    sentence stands in: the student sees what they typed and can rename it
+    #    in the preview, which beats a blank row.
     if not title:
         # Fall back to the raw input trimmed of trailing punctuation.
         title = raw.strip(' .,;:-')
@@ -738,8 +789,38 @@ def _extract_title(raw: str, matched_spans: list) -> str:
 # --- scoring ---------------------------------------------------------------
 
 def _score(detected: set) -> str:
-    """HIGH/MEDIUM/LOW from the count of genuinely-detected scored fields."""
+    """Confidence in a parse, from how many fields it genuinely found (FR17).
+
+    `detected` is the set of field names _parse_one actually recognised — a
+    subset of {'subject', 'type', 'due_date', 'weight'} in practice, though it
+    is intersected with _SCORED_FIELDS rather than trusted, so adding a field to
+    the result dict later cannot quietly inflate every score.
+
+    Returns one of VALID_CONFIDENCE: 'HIGH' (4 fields), 'MEDIUM' (2-3), 'LOW'
+    (0-1), which are FR17's bands exactly. The client shows this as a coloured
+    pill above the preview, and the bulk dialog leaves LOW rows unticked by
+    default, so a poor parse costs the student a click rather than a wrong row.
+
+    WHAT COUNTS AS "GENUINELY FOUND" is decided by the caller, not here, and it
+    is the interesting half of the rule:
+      * 'type' is added only when a TYPE_KEYWORDS keyword actually fired. Every
+        parse gets a type — 'other' is the fallback — so counting the field's
+        presence would give a free point to every sentence.
+      * 'due_date' is added only when a date was resolved. A 'Term X Week Y'
+        phrase with no school_terms configured therefore scores nothing, which
+        is the LOW-confidence-on-missing-config behaviour FR15 asks for.
+
+    NO FIELD IS WEIGHTED, and nothing here is a hard gate: a sentence with a
+    subject and a weight but no date scores MEDIUM. What is true is that HIGH
+    needs all four, so a parse with no resolvable due date can never reach it.
+    Nothing downstream refuses to save on confidence either — the score is
+    advice to the student, and the preview is where they act on it.
+    """
+    # Counting rather than checking named fields keeps the rule symmetric: no
+    # single field can make or break a score on its own.
     hits = len(detected & set(_SCORED_FIELDS))
+    # >= rather than == so the bands still hold if _SCORED_FIELDS ever grows;
+    # with four scored fields, 'hits >= 4' can only mean all of them.
     if hits >= 4:
         return 'HIGH'
     if hits >= 2:
@@ -750,18 +831,58 @@ def _score(detected: set) -> str:
 # --- orchestration ---------------------------------------------------------
 
 def _parse_one(line: str, today: datetime.date, settings_row) -> dict:
-    """Parse a single line into the parse_text result dict. Never raises."""
+    """Run every matcher over one sentence and assemble the result dict.
+
+    The single place the parse is put together, shared by both callables so
+    parse_text and parse_bulk cannot drift apart in what they produce.
+
+    `line` is one sentence (None is tolerated and read as blank). `today` is
+    the student's local today. `settings_row` is their user_settings Row, read
+    for `subjects` and `school_terms` only.
+
+    Returns the dict documented at the top of this module: 'fields', 'why',
+    'confidence', 'source_text'. Writes nothing. NEVER RAISES — every matcher
+    it calls answers "not found" instead of throwing, which is what lets the
+    bulk path keep going past a line it could not understand.
+    """
     line = (line or '').strip()
 
+    # 1. The matchers are independent — each one searches the whole sentence
+    #    for its own thing — so the order of these four lines does not matter.
+    #    They read the sentence rather than each other's leftovers, so a word
+    #    can legitimately serve two of them at once (the '2' in "SAC2").
+    #
+    #    user_subjects is the student's locked-in studies from settings; it
+    #    only breaks ties inside _match_subject and is not needed elsewhere.
+    #    *_src holds the literal text that produced each value, kept for the
+    #    'why' strings and for title stripping.
     user_subjects = _stored_subjects(settings_row)
     subject, subject_src = _match_subject(line, user_subjects)
     type_value, type_src = _match_type(line)
     weight, weight_src = _extract_weight(line)
     due_date, date_why, term_info, date_src = _extract_date(line, today, settings_row)
 
-    # Strip date/weight/week phrases from the title; keep subject/type words.
+    # 2. The title is whatever is left over, so it must be built AFTER the
+    #    matchers have reported which words they consumed. The week phrase is
+    #    re-found separately because date_src holds only what the winning
+    #    branch matched: when step 2's '12/03' resolved the date, an
+    #    accompanying "week 5" was never claimed by anyone and would otherwise
+    #    survive into the title.
+    #    Strip date/weight/week phrases from the title; keep subject/type words.
     title = _extract_title(line, [weight_src, date_src, _find_week_phrase_text(line)])
 
+    # 3. 'why' and 'detected' are filled in the same pass because they answer
+    #    the same question: a field is explained to the student exactly when it
+    #    counts toward the score, so the pill and the provenance lines can never
+    #    disagree about what was found.
+    #
+    #    Each test names the value that proves a REAL detection, which is not
+    #    always the field itself:
+    #      * subject — None when no alias appeared.
+    #      * type    — tested on type_src, not type_value: type_value is 'other'
+    #                  for an unrecognised sentence, and 'other' is a fallback
+    #                  rather than a finding. This is the only asymmetric one.
+    #      * due_date/weight — None when unresolved.
     why = {}
     detected = set()
     if subject is not None:
@@ -771,12 +892,19 @@ def _parse_one(line: str, today: datetime.date, settings_row) -> dict:
         why['type'] = 'matched "%s" → %s' % (type_src, type_value)
         detected.add('type')
     if due_date is not None:
+        # Reuses the sentence _extract_date already built, because only that
+        # function knows which of its seven branches fired.
         why['due_date'] = date_why
         detected.add('due_date')
     if weight is not None:
+        # '%g' rather than '%s' so a whole-number weight reads "25%" and not
+        # "25.0%", while 12.5 still shows its half.
         why['weight'] = 'matched "%s" → %s%%' % (weight_src, ('%g' % weight))
         detected.add('weight')
 
+    # 4. 'fields' mirrors the assessment columns the client will submit, so the
+    #    preview form can bind to it directly. source_text is the stripped
+    #    sentence, stored on the row as the parser's audit trail (spec §3.2).
     return {
         'fields': {
             'title': title,
@@ -794,17 +922,31 @@ def _parse_one(line: str, today: datetime.date, settings_row) -> dict:
 
 @anvil.server.callable
 def parse_text(s: str) -> dict:
-    """Parse one assessment sentence into a preview dict (never writes to the DB).
+    """Parse one assessment sentence into a preview dict (FR01, FR17).
+
+    The Parse button on the dashboard calls this. It never writes to the DB —
+    the student sees the result in AssessmentEditorForm mode='preview' and
+    presses Save (which calls assessments.create_assessment) or Cancel.
+
+    `s` is the raw sentence, at most MAX_PARSER_INPUT_LENGTH (500) characters.
+    Returns the result dict documented at the top of this module.
 
     Raises ValueError when the box is empty or the sentence is over
     MAX_PARSER_INPUT_LENGTH: a blank parse used to return a LOW-confidence record
     with an empty title, which tells the student nothing about what went wrong.
+    Also raises (from _require_user) when nobody is logged in — NFR03, and the
+    reason the settings read below is safe to scope to one user.
     """
     user = _require_user()
     # Validated before any work is done, so a bad input costs one message rather
     # than a settings read and a full regex chain over an unbounded string.
     raw_text = require_text(s, 'Assessment text', MAX_PARSER_INPUT_LENGTH)
+    # One settings read serves the whole parse: _stored_subjects and
+    # _try_parse_week_phrase both take the Row rather than fetching their own,
+    # so a parse costs a single table hit (NFR01).
     settings_row = _get_or_create_settings(user)
+    # Resolved from the student's stored timezone, not the server's clock, so
+    # 'tomorrow' typed at 11pm means the day they mean.
     today = _user_today(settings_row)
     return _parse_one(raw_text, today, settings_row)
 
@@ -812,6 +954,17 @@ def parse_text(s: str) -> dict:
 @anvil.server.callable
 def parse_bulk(s: str) -> list:
     """Parse one assessment per non-blank line; each result carries 'line_index'.
+
+    The parsing half of FR02. `s` is the whole bulk-add box: at most
+    MAX_BULK_LINES (100) lines, each at most MAX_PARSER_INPUT_LENGTH (500)
+    characters. Returns a list of the usual result dicts, one per non-blank
+    line, each with an extra 'line_index' key — the 0-based position of that
+    line in the ORIGINAL paste, which the bulk dialog turns into the "Line 7"
+    label beside a row. Blank lines produce no entry, so list position and
+    line_index deliberately do not agree.
+
+    Writes nothing, exactly like parse_text: the client tick-boxes the rows it
+    wants and assessments.create_bulk_assessments does the writing.
 
     Raises ValueError when the paste is empty, holds more than MAX_BULK_LINES
     lines, or contains a single line longer than MAX_PARSER_INPUT_LENGTH — the
@@ -824,11 +977,17 @@ def parse_bulk(s: str) -> list:
     # 'line_index' whenever the paste happens to start with a blank line.
     require_text(s, 'Bulk assessment text', _MAX_BULK_TEXT_LENGTH)
     lines = require_list((s or '').splitlines(), 'Bulk assessment text')
+    # Counted BEFORE any parsing, so a 5,000-line paste costs one message
+    # instead of five thousand regex chains (NFR01). The message quotes both
+    # numbers because "too many lines" alone does not tell the student how much
+    # to cut.
     if len(lines) > MAX_BULK_LINES:
         raise ValueError(
             'That is %d lines — paste at most %d at a time.'
             % (len(lines), MAX_BULK_LINES))
 
+    # Read once for the whole paste rather than per line: 100 lines would
+    # otherwise mean 100 identical settings lookups (NFR01).
     settings_row = _get_or_create_settings(user)
     today = _user_today(settings_row)
     results = []
@@ -840,6 +999,10 @@ def parse_bulk(s: str) -> list:
         # student can find the offending line in the box they just pasted into.
         clean_line = require_text(line, 'Line %d' % (i + 1), MAX_PARSER_INPUT_LENGTH)
         result = _parse_one(clean_line, today, settings_row)
+        # `i` counts every line of the paste, blanks included, which is what
+        # makes it usable as a pointer back into the box the student is looking
+        # at. len(results) would count only the lines that survived and would
+        # name the wrong one as soon as a blank line appears.
         result['line_index'] = i
         results.append(result)
     return results

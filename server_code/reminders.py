@@ -31,6 +31,15 @@ DEDUPLICATION (NFR02)
     sent_date is still recorded on the row, because the log is also the audit trail
     for when a reminder actually went out.
 
+WHAT THIS MODULE DEFINES, in the order they appear
+    _get_due_thresholds(days, reminder_days)  which thresholds are open today.
+    _build_email(assessment, days)            -> (subject, text, html).
+    _process_user(user, run_counts)           one student's whole pass.
+    run_reminder_check()                      the scheduled task itself (FR13).
+    trigger_reminder_check_now()              the only @anvil.server.callable in
+                                              this module, and dev-gated — see
+                                              its own docstring for why.
+
 WHY THE HELPERS TAKE PLAIN DICTS
     _get_due_thresholds() and _build_email() are pure functions over plain values, not
     over Anvil Rows, so the whole decision — should this email go, and what does it
@@ -50,6 +59,11 @@ from ._constants import (
 )
 from ._validation import safe_list, safe_bool, safe_choice, safe_date, is_positive_int
 
+# Optional import, not a stylistic one. Only trigger_reminder_check_now needs the
+# Secrets service, and this module's real job is the scheduled dispatcher — so an
+# app without secrets configured must still be able to import reminders.py and run
+# the 30-minute task. _secrets stays None there and the trigger refuses everyone,
+# which is the safe way round.
 try:
     import anvil.secrets as _secrets
 except ImportError:
@@ -188,10 +202,21 @@ def _process_user(user, run_counts):
     mutates its 'sent' and 'errors' entries in place rather than returning, so one
     student failing cannot lose the counts for the students already processed.
 
-    Every value read below comes out of the database, so each is guarded on the way
-    out (SAT criterion 7.3, the "as well as from the database" limb): a settings row
-    can predate a column, and any simpleObject cell can be edited by hand in the Anvil
-    Data Tables console.
+    `user` is a row from the users table, supplied by the loop in
+    run_reminder_check. Returns nothing — the outcome of a pass is the emails it
+    sent and the two counters it bumped.
+
+    Every value read below comes out of the database, and the ones a wrong value
+    would actually act on are guarded on the way out (SAT criterion 7.3, the "as
+    well as from the database" limb): the notifications switch through safe_bool,
+    the status through safe_choice, the due date through safe_date, and both
+    reminder-days lists through safe_list. Those are the four that DECIDE whether
+    an email goes. A settings row can predate a column, and any simpleObject cell
+    can be edited by hand in the Anvil Data Tables console.
+
+    The four fields that only appear in the message text — title, subject, type and
+    weight — are read raw at step 9 and defaulted inside _build_email instead, since
+    a missing one costs a word in an email rather than a wrong decision.
     """
     # 1. Find the student's settings. No row at all means they have never opened the
     #    app past sign-up, so there is nothing to remind them about yet.
@@ -209,8 +234,11 @@ def _process_user(user, run_counts):
     if not safe_bool(settings['notifications_enabled'], default=False):
         return
 
-    # 3. "Today" must be the student's local today, not the server's UTC today, or an
-    #    assessment due tomorrow in Melbourne looks due today to a UTC server.
+    # 3. "Today" must be the student's local today, not the server's UTC today.
+    #    Melbourne runs 10-11 hours ahead of UTC, so through the whole Melbourne
+    #    morning the server's own date is still yesterday's — every assessment
+    #    would measure a day further away than it is, and each threshold below
+    #    would come due a day late.
     today = _user_today(settings)
     # Read once, outside the loop: it is the same for every assessment this student
     # owns, and a student with 100 assessments would otherwise re-read the same
@@ -265,15 +293,24 @@ def _process_user(user, run_counts):
                 run_counts['errors'] += 1
                 continue
 
+            # 9. Compose the message. A plain dict is built here rather than the
+            #    Row being passed along, which is what keeps _build_email pure and
+            #    testable — see the module docstring. `due_date` is the guarded
+            #    value from step 4, not assessment['due_date'] again, so the date
+            #    printed in the email is the same one the countdown was measured
+            #    from. The other four are the message's wording only, and
+            #    _build_email defaults each one.
             email_subject, text_body, html_body = _build_email({
                 'title': assessment['title'], 'subject': assessment['subject'],
                 'type': assessment['type'], 'due_date': due_date,
                 'weight': assessment['weight'],
             }, days_remaining)
 
-            # 9. The log row is written ONLY after a successful send, so a failed
-            #    delivery is retried on the next tick instead of being silently
-            #    recorded as delivered.
+            # 10. The log row is written ONLY after a successful send, so a failed
+            #     delivery is retried on the next tick instead of being silently
+            #     recorded as delivered. sent_date goes on the row even though the
+            #     dedup lookup at step 7 does not read it: the log doubles as the
+            #     audit trail for when a reminder actually went out.
             try:
                 anvil.email.send(to=recipient, subject=email_subject,
                                  text=text_body, html=html_body)
@@ -329,14 +366,55 @@ def run_reminder_check() -> dict:
 
 @anvil.server.callable
 def trigger_reminder_check_now() -> dict:
-    """Dev-only manual trigger. Gated by the DEV_EMAIL app secret."""
+    """Dev-only manual trigger. Gated by the DEV_EMAIL app secret.
+
+    Exists because the real schedule is every 30 minutes, so testing a change to
+    the dispatcher otherwise means a 30-minute wait per attempt. This runs the
+    same pass immediately and hands back the same summary, which is how the send
+    path was exercised against live rows during the testing sweep.
+
+    Takes no parameters — as with every callable here the identity comes from the
+    session cookie, not from an argument. Returns run_reminder_check()'s dict:
+    {'sent': int, 'errors': int, 'run_at': ISO-8601 UTC string}.
+
+    Raises anvil.users.AuthenticationFailed when nobody is signed in, and
+    PermissionError('dev only') for every account that is not the developer's —
+    including on an app where the secret was never set up (docs/MANUAL_SETUP.md
+    section 6), which is the safe way for that to fail.
+
+    The gate is the whole point of the function. This is the only client-reachable
+    door into code that reads EVERY account's rows and sends real email, so it is
+    the one place that cannot use NFR03's usual answer of scoping the queries to
+    current_user. Instead it asks who is calling and refuses anyone else.
+    """
     user = _require_user()
+    # The permitted address is an App Secret rather than a literal in this file, so
+    # the developer's email is not sitting in a repo the client reads and can be
+    # changed or removed without a redeploy. dev_email starts as None so every
+    # failure path below arrives at the same refusing value.
     dev_email = None
+    # anvil.secrets is imported at module scope inside a try/except, so _secrets is
+    # None on any runtime where the Secrets service is not present and the import
+    # itself fails. Guarding here rather than letting that ImportError happen at
+    # module load keeps the rest of the module — the scheduled dispatcher above —
+    # importable and running on an app that has no secrets configured.
     if _secrets is not None:
         try:
             dev_email = _secrets.get_secret('DEV_EMAIL')
         except Exception:
+            # Broad on purpose: a missing secret, a service not enabled and a
+            # transient lookup failure all mean the same thing here — this call
+            # cannot be proven to be the developer's, so it must not proceed.
             dev_email = None
+    # FAILS CLOSED, and both halves of the test are load-bearing. Without the
+    # `not dev_email` half, an app with no secret configured would compare against
+    # None — and a user row whose own email column was also unset would satisfy
+    # None != None as False, unlocking the whole-database pass for that account.
     if not dev_email or user['email'] != dev_email:
         raise PermissionError("dev only")
+    # Called directly rather than through anvil.server.launch_background_task, even
+    # though run_reminder_check is a background task: a direct call runs it inline
+    # in this request so its summary dict can be returned to the caller. A launched
+    # task would return a task handle instead, and the developer would be back to
+    # reading the Background Tasks console.
     return run_reminder_check()

@@ -428,6 +428,15 @@ TYPE_KEYWORDS = {
 # that the phrase order inside each list matters the same way TYPE_KEYWORDS'
 # does: 'completed' is listed ahead of 'complete' precisely because a walk that
 # met the shorter word first would match the front of the longer one.
+#
+# READ BY: nothing. Re-checked 2026-09-02 by grepping the whole repo for the
+# name — the only hits are this definition, the index at the top of this file,
+# and the docs. It is the ONE constant in this module with no live consumer, so
+# it is called out here rather than left for a reader to discover.
+#
+# Note that this is NOT the same situation as ALLOWED_FILTER_KEYS' inert
+# 'sort_by' member: that table is live and one of its entries is unused, while
+# this whole table is dormant.
 STATUS_KEYWORDS = {
     'not_started': ['not started', 'todo', 'to do', 'not begun'],
     'in_progress': ['in progress', 'started', 'ongoing', 'wip'],
@@ -489,56 +498,224 @@ URGENCY_THRESHOLDS = [
 # docs/DISCREPANCIES.md — the values are persisted in every existing row and mirrored
 # in both client forms, so the code governs. Do not "correct" them toward the
 # document; it would invalidate every stored record and every export file.
+#
+# frozensets, not tuples, because every use is a membership test ("is this
+# value allowed?") and never a display order — the human-readable labels and
+# their order live in the client forms. Frozen so an import cannot mutate them.
+#
+# VALID_TYPES — the six kinds of assessment FR03 fixes for the type dropdown.
+#   'sac'/'sat' are the VCE assessment tasks (School Assessed Coursework /
+#   School Assessed Task), 'exam' also covers a class test (see TYPE_KEYWORDS),
+#   'project' covers assignments and pracs, 'homework' is a small set task, and
+#   'other' is the catch-all the parser falls back to when it recognises no
+#   keyword. Every TYPE_KEYWORDS key is a member, so a parse can never produce a
+#   type the write path rejects (test_constants_integrity asserts that).
+#
+# VALID_STATUSES — where the student is up to. 'not_started' is where every new
+#   row begins (STATUS_DEFAULT), 'in_progress' is set by hand, and 'completed'
+#   is the one status other code branches on (STATUS_COMPLETED).
+#
+# VALID_CONFIDENCE — how much of a sentence the parser understood (FR17), set by
+#   nlp._score. UPPERCASE, unlike the other two, because these are shown to the
+#   student as a pill rather than stored as a machine value; a manually created
+#   row stores None here, which is why the validators accept None as well.
 VALID_TYPES = frozenset(('sac', 'sat', 'exam', 'project', 'homework', 'other'))
 VALID_STATUSES = frozenset(('not_started', 'in_progress', 'completed'))
 VALID_CONFIDENCE = frozenset(('HIGH', 'MEDIUM', 'LOW'))
 
 # The single status that means "no more reminders, hide from the default list".
-# Named so the two modules that test for it cannot disagree by a typo.
+# Named so the three modules that use it cannot disagree by a typo: reminders
+# skips a completed assessment before it emails, dashboard leaves it out of the
+# "upcoming" sidebar panel, and assessments subtracts it from VALID_STATUSES to
+# build the query behind FR06's "hide completed by default".
+#
+# STATUS_DEFAULT is what create_assessment stamps when the client sends no
+# status — 'not_started' rather than 'in_progress' because the app has no way of
+# knowing the student has begun, and guessing would defeat the reminders.
+#
+# Both are separate names rather than literals sprinkled through four modules:
+# a typo in a bare 'completed' would not raise, it would just quietly stop
+# matching, and an assessment would keep emailing after being marked done.
 STATUS_COMPLETED = 'completed'
 STATUS_DEFAULT = 'not_started'
 
 # --- Field bounds ----------------------------------------------------------
 # Every numeric and length limit the validators enforce, in one place, so the
-# per-field validation table in docs/VALIDATION.md has a single source to cite.
+# per-field validation table in docs/VALIDATION.md has a single source to cite,
+# and so the client can grey out Save on the same number the server rejects on
+# (AssessmentEditorForm and NoteEditorForm mirror several of these by hand —
+# Anvil client code cannot import a server module).
+#
+# NONE OF THESE ARE ROUND NUMBERS FOR THEIR OWN SAKE. Each one is either a
+# measured limit of the UI it protects or a bound that stops an input reaching
+# arithmetic that would misbehave, and the reason is recorded beside it. Where
+# two limits must agree (a parser sentence and the column that stores it), the
+# same value is used on purpose and is noted as such.
+#
+# A caller must never inline one of these numbers. `_validation` takes them as
+# arguments so the message the student reads quotes the same limit the check
+# used; a hard-coded 200 somewhere would drift the first time this changes.
+
+# Text lengths, in characters, all measured AFTER stripping.
+# 200 is roughly two lines of the assessment card's heading at the dashboard's
+# width — past that the card grows and the list stops scanning cleanly (NFR01's
+# render budget is about the whole list). READ BY: assessments (title),
+# notes (title), nlp._extract_title (truncates so a parsed title can never be
+# rejected for a length the parser itself produced), and both editor forms.
 MAX_TITLE_LENGTH = 200           # assessments.title and notes.title
+# 2000 is about one screen of context — a description is meant to be the task
+# instructions in brief, not the task itself. READ BY: assessments.
 MAX_DESCRIPTION_LENGTH = 2000    # assessments.description — one screen of context
+# 20000 is a full page of study notes, generous because this IS the content
+# rather than a label on it; the cap exists only to keep one row from bloating
+# the table and the export file. READ BY: notes, NoteEditorForm.
 MAX_NOTE_CONTENT_LENGTH = 20000  # notes.content — a full page of study notes
+# A tag is a filter chip, so 40 chars is already longer than one should be; the
+# limit stops a pasted paragraph becoming an unusable chip. READ BY: notes,
+# NoteEditorForm.
 MAX_TAG_LENGTH = 40              # one notes.tags entry
+# 20 tags is past the point where a tag filter helps at all (FR11), and the
+# chips would wrap over the note itself. Counted AFTER de-duplication, so
+# repeating a tag cannot use up the allowance. READ BY: notes, NoteEditorForm.
 MAX_TAGS_PER_NOTE = 20
+# Deliberately EQUAL to MAX_PARSER_INPUT_LENGTH below: this column stores the
+# sentence that box accepted, so a shorter cap here would silently truncate an
+# input the parser had just called valid. Trimmed rather than rejected on write,
+# because the audit trail must never block a save. READ BY: assessments.
 MAX_SOURCE_TEXT_LENGTH = 500     # the raw sentence the parser was given
+# Weight is a percentage of the study score, so 0-100 is the definition rather
+# than a chosen limit. Floats, not ints, because half-marks are real ("12.5%").
+# 0 is allowed: an ungraded practice task still belongs on the dashboard.
+# READ BY: assessments (validating a write), dashboard (cleaning a stored
+# value), AssessmentEditorForm.
 MIN_WEIGHT = 0.0                 # assessments.weight, a percentage
 MAX_WEIGHT = 100.0
 # Reminder offsets are "days before due". One day is the shortest useful warning and
 # a year is longer than any VCE assessment is set in advance; the upper bound exists
 # because an unbounded value (e.g. 999999) made every assessment permanently "due
 # soon" and emailed the student about all of them on the first scheduler tick.
+# READ BY: assessments, notes (the default list on the settings row),
+# _validation.is_valid_reminder_day, AssessmentEditorForm.
 MIN_REMINDER_DAY = 1
 MAX_REMINDER_DAY = 365
+# Six offsets per assessment. Each one is a separate email (FR14), so this caps
+# how much mail one assessment can generate — six is well clear of the two the
+# app defaults to (assessments._DEFAULT_REMINDER_DAYS is 7 and 2 days before)
+# while stopping a student from setting a daily countdown they would learn to
+# ignore. READ BY: assessments (per assessment) and notes (the same cap on the
+# settings row's default_reminder_days list).
 MAX_REMINDER_DAYS_PER_ASSESSMENT = 6
+# 100 lines is more than a term's worth of assessments pasted at once, and it
+# bounds the work one call can ask for: the check runs before any parsing, so an
+# oversized paste costs one message rather than 5,000 regex chains (NFR01).
+# READ BY: nlp.parse_bulk (parsing) and assessments.create_bulk_assessments
+# (writing) — the same limit on both halves of FR02, so the client cannot parse
+# more rows than the server will store.
 MAX_BULK_LINES = 100             # one paste of the bulk-add box
+# 500 characters is far more than the one sentence the parser is for; it is a
+# guard on the regex chain rather than a stylistic limit. See
+# MAX_SOURCE_TEXT_LENGTH, which must stay equal to it. READ BY: nlp (both
+# callables), and nlp._MAX_BULK_TEXT_LENGTH derives the whole-paste cap from
+# this times MAX_BULK_LINES so the two can never contradict each other.
 MAX_PARSER_INPUT_LENGTH = 500    # one sentence into the parser box
+# A VCE program is 4-6 studies; 12 leaves room for a student repeating a unit or
+# carrying an extra, while still refusing an accidental select-all of the 56
+# study catalog. READ BY: notes._clean_subjects, SettingsForm.
 MAX_SUBJECTS_PER_STUDENT = 12    # a VCE program is 4-6 studies; 12 is generous
+# The Victorian school year has exactly four terms, so this pair is a fact about
+# the calendar rather than a policy. READ BY: notes._validate_school_terms (on
+# the way in, from the Settings page) and nlp._is_well_formed_term (on the way
+# back out, guarding the simpleObject column) — the same bound on the write and
+# the read, which is what stops the two rules drifting apart.
 MIN_TERM_NUMBER = 1              # Victorian school year has four terms
 MAX_TERM_NUMBER = 4
 
 # --- Whitelists ------------------------------------------------------------
+# The four sets below are all the same idea: a @anvil.server.callable is
+# reachable by anything holding a session cookie, so the SERVER decides which
+# keys mean anything and every other key is dropped in silence. Dropped rather
+# than refused, because an unrecognised key is a bug or a probe, and neither
+# deserves an error message that describes the schema back to the sender.
+#
+# Sets and tuples, never lists, so an import cannot append a fifth editable
+# column to the whitelist at runtime.
+
+# The filter keys list_assessments recognises (FR06 + FR07's sort_by). Anything
+# else in the filters dict is discarded before the query is built, so a stale
+# client sending a renamed key gets the unfiltered list rather than an error.
+# READ BY: dashboard._safe_filters, which is the one consumer — it intersects
+# the incoming dict against this set and then validates each surviving VALUE
+# separately (a permitted key does not make its value trustworthy).
+#
+# ONE MEMBER IS INERT: 'sort_by' is whitelisted but read by nothing. Sorting
+# travels in list_assessments' separate `sort` argument and is checked against
+# ALLOWED_SORT_KEYS below, so a 'sort_by' entry survives _safe_filters and is
+# then ignored by _list_assessments_impl. It is left in because dropping it
+# would make a client that still sends the key look like it was rejected, and
+# because the key is the obvious name for the feature if the two arguments are
+# ever merged. Do not read this as evidence that sorting goes through here.
 ALLOWED_FILTER_KEYS = {'subjects', 'types', 'statuses', 'show_completed', 'sort_by', 'month'}
+
+# The three columns FR07 permits sorting by. FR07 makes 'due_date' the default
+# and names the other two as alternatives; a sort key outside this set falls
+# back to that default rather than raising, because a bad sort is not worth
+# refusing to show the student their assessments over.
+#
+# A whitelist and not a passthrough because the value ends up naming a column in
+# a Data Tables query: accepting an arbitrary string would let a caller sort by
+# — and so learn about — columns the client is never shown.
+#
+# READ BY: assessments (validating the sort argument to list_assessments) and
+# mirrored by hand into DashboardForm._SORTS, which builds the sort dropdown.
 ALLOWED_SORT_KEYS = {'due_date', 'weight', 'subject'}
 
-# Fields a client is permitted to edit (FR04 / EC-SEC-03). 'confidence',
-# 'source_text', 'user', 'created_at' are deliberately excluded so the parser
-# audit trail survives edits.
+# Fields a client is permitted to edit (FR04 / EC-SEC-03). Read by
+# assessments.update_assessment, which filters the incoming patch against this
+# tuple before validating anything, and mirrored by AssessmentEditorForm, which
+# only ever sends these keys.
+#
+# FOUR COLUMNS ARE EXCLUDED ON PURPOSE, and the exclusions are the point of the
+# whitelist rather than an afterthought:
+#   user                    re-assigning it would hand the row to another
+#                           account, which is the NFR03 hole the check exists
+#                           to close;
+#   created_at              the audit stamp of when the record was made;
+#   confidence, source_text the PARSER'S audit trail (FR17). Storing "this was
+#                           parsed with LOW confidence from 'methods sac
+#                           friday'" is pointless if correcting the date can
+#                           quietly rewrite it, so the trail is written once at
+#                           create time and never again.
+# 'term_info' IS editable, unlike the other two parser fields, because it is a
+# description of the input rather than the input itself and the student may
+# need to correct a term phrase the parser misread.
 EDITABLE_FIELDS_ASSESSMENT = (
     'title', 'subject', 'type', 'due_date', 'start_date', 'weight',
     'status', 'description', 'reminder_days', 'linked_note_ids', 'term_info',
 )
 
+# The same rule applied to notes (FR10). Short because a note has little else:
+# 'user' and 'created_at' are excluded for the reasons above, and 'updated_at'
+# is stamped by the server on every write rather than sent by the client.
+# READ BY: notes.update_note; mirrored by NoteEditorForm.
 EDITABLE_FIELDS_NOTE = (
     'title', 'content', 'tags', 'is_pinned',
 )
 
 # --- Misc ------------------------------------------------------------------
 # Base URL used in reminder email links (spec section 6): the app's published
-# public URL (Anvil Hobby-plan environment).
+# public URL (Anvil Hobby-plan environment). No trailing slash, so a caller
+# always joins with an explicit '/'.
+#
+# It is a constant rather than a computed value because a reminder email is
+# built by the SCHEDULED TASK (FR13), which runs with no browser attached —
+# there is no request to read a host name off, so the address has to be written
+# down somewhere. Here rather than in reminders.py so that the one thing which
+# changes when the app is republished under a different Anvil name is findable.
+#
+# The value is Anvil's auto-generated hobby-plan hostname; it changes if the app
+# is ever moved to a custom domain, and every link in every future email changes
+# with it. Nothing validates it at runtime — a wrong URL sends mail with dead
+# links rather than failing loudly, so it is worth checking after a republish.
+#
+# READ BY: reminders only.
 APP_BASE_URL = 'https://honored-willing-tea.anvil.app'
