@@ -28,11 +28,16 @@ import anvil.server
 import datetime
 
 from ._auth import _require_user
-from ._constants import ENGLISH_GROUP
+from ._constants import CANONICAL_SUBJECTS, ENGLISH_GROUP
 from ._datetime import _user_now, _urgency_band
+from ._validation import safe_date, safe_list, safe_text
 from .notes import _get_or_create_settings, _row_value
 
 EXAM_SOURCE_URL = 'https://www.vcaa.vic.edu.au/administration/key-dates/vce-examination-timetable'
+
+# Membership set for the read-guard below; CANONICAL_SUBJECTS is a display-ordered
+# tuple, and this is asked once per stored subject on every dashboard load.
+_CATALOG_SUBJECTS = frozenset(CANONICAL_SUBJECTS)
 
 # {canonical subject: [{'date': 'YYYY-MM-DD', 'start': 'HH:MM', 'end': 'HH:MM',
 #                       'paper': str}, ...]} — one entry per written paper.
@@ -217,40 +222,80 @@ NO_WRITTEN_EXAM = frozenset((
 
 # --- pure helpers (offline-testable) ----------------------------------------
 
-def _exam_subjects(settings_row) -> list:
+def _is_catalog_subject(value) -> bool:
+    """Element predicate for safe_list: a subject the picker actually offers.
+
+    notes._clean_subjects enforces this when the student saves their program, but
+    the Data Tables console and a half-applied import both bypass that path. An
+    unguarded stray value would be looked up in EXAM_TIMETABLE_2026, miss, and then
+    be reported to the student under 'not_covered' — presenting a bad cell as a gap
+    in this app's timetable data.
+    """
+    return value in _CATALOG_SUBJECTS
+
+
+def _parse_clock(text):
+    """'HH:MM' -> (hour, minute), or None when the text is not a clock time.
+
+    Returns None rather than raising so a mistyped timetable entry costs one
+    finished-today check, not the whole exams page.
+    """
+    parts = text.split(':') if isinstance(text, str) else []
+    if len(parts) != 2 or not (parts[0].isdigit() and parts[1].isdigit()):
+        return None
+    return int(parts[0]), int(parts[1])
+
+
+def _get_exam_subjects(settings_row) -> list:
     """The subjects whose exams the user sees: their locked list, with English
     appended if no English-group study is present (the same guarantee
     notes._clean_subjects enforces; kept here for legacy rows written before
-    onboarding shipped). Empty list = not onboarded yet."""
-    subjects = _row_value(settings_row, 'subjects') or []
+    onboarding shipped). Empty list = not onboarded yet.
+
+    The stored list is read through safe_list (criterion 7.3, the database limb):
+    user_settings.subjects is an Anvil simpleObject, so the cell can hold a scalar,
+    a dict, or a list with one bad entry among good ones. Unusable entries are
+    dropped and the rest still work, because refusing to show a student their exams
+    over one damaged value is worse than showing the ones that are readable.
+    """
+    subjects = safe_list(_row_value(settings_row, 'subjects'),
+                         element_check=_is_catalog_subject)
     if subjects and not any(s in ENGLISH_GROUP for s in subjects):
-        subjects = list(subjects) + ['English']
+        subjects = subjects + ['English']
     return subjects
 
 
-def _exams_for_subjects(subjects, today: datetime.date, now=None) -> list:
+def _build_exams_for_subjects(subjects, today: datetime.date, now=None) -> list:
     """Decorated exam list for `subjects`, soonest first.
 
     Each item: subject, paper, date (ISO), start, end, days_remaining,
     urgency_band ('done' once the paper is over — including earlier TODAY
     when `now`, a tz-aware datetime in the user's zone, is supplied).
+
+    Returns an empty list for an empty or missing subject list — a student who has
+    not finished onboarding, or whose studies are all in NO_WRITTEN_EXAM. Every
+    caller treats [] as "nothing to show" rather than indexing into it.
     """
     out = []
-    for subject in subjects:
+    for subject in (subjects or []):
         for e in EXAM_TIMETABLE_2026.get(subject, []):
-            d = datetime.date.fromisoformat(e['date'])
+            d = safe_date(e.get('date'))
+            if d is None:
+                # One unreadable timetable row is skipped rather than raised, so a
+                # single bad transcription cannot cost the student the other fifty.
+                continue
             days = (d - today).days
             band = 'done' if days < 0 else _urgency_band(days)
             if days == 0 and now is not None:
-                end_h, end_m = e['end'].split(':')
-                if (now.hour, now.minute) >= (int(end_h), int(end_m)):
+                end = _parse_clock(e.get('end'))
+                if end is not None and (now.hour, now.minute) >= end:
                     band = 'done'
             out.append({
                 'subject': subject,
-                'paper': e['paper'],
-                'date': e['date'],
-                'start': e['start'],
-                'end': e['end'],
+                'paper': safe_text(e.get('paper')),
+                'date': d.isoformat(),
+                'start': safe_text(e.get('start')),
+                'end': safe_text(e.get('end')),
                 'days_remaining': days,
                 'urgency_band': band,
             })
@@ -258,30 +303,36 @@ def _exams_for_subjects(subjects, today: datetime.date, now=None) -> list:
     return out
 
 
-def _next_exam(exams: list):
+def _find_next_exam(exams: list):
     """The first not-yet-finished exam dict, or None (input must be sorted).
 
-    Skips 'done' bands, so a paper that ended earlier today is never shown
-    as 'Next exam: TODAY'.
+    Deliberately a scan with a None result rather than exams[0]: the list is empty
+    for a student who has not onboarded, and every entry is 'done' once the exam
+    period has passed. Both are ordinary states, not errors, and both must produce
+    None so the dashboard chip and the exams page simply draw nothing.
     """
-    for e in exams:
-        if e['days_remaining'] >= 0 and e['urgency_band'] != 'done':
+    for e in (exams or []):
+        days = e.get('days_remaining')
+        if days is not None and days >= 0 and e.get('urgency_band') != 'done':
             return e
     return None
 
 
-def _exam_days_for_month(exams: list, year: int, month: int) -> dict:
+def _get_exam_days_for_month(exams: list, year: int, month: int) -> dict:
     """{str(day): ['Subject — paper', ...]} for the given calendar month.
 
     Keys are stringified for Anvil serialization, matching the dashboard
-    calendar's day_buckets convention.
+    calendar's day_buckets convention. An empty or missing list gives {}, which is
+    what the calendar draws for a month with no exams in it.
     """
     days = {}
-    for e in exams:
-        d = datetime.date.fromisoformat(e['date'])
+    for e in (exams or []):
+        d = safe_date(e.get('date'))
+        if d is None:
+            continue
         if d.year == year and d.month == month:
             days.setdefault(str(d.day), []).append(
-                '%s — %s' % (e['subject'], e['paper']))
+                '%s — %s' % (safe_text(e.get('subject')), safe_text(e.get('paper'))))
     return days
 
 
@@ -295,14 +346,14 @@ def get_exam_timetable() -> dict:
     now = _user_now(settings)
     today = now.date()
 
-    subjects = _exam_subjects(settings)
-    exams = _exams_for_subjects(subjects, today, now)
+    subjects = _get_exam_subjects(settings)
+    exams = _build_exams_for_subjects(subjects, today, now)
     uncovered = [s for s in subjects if s not in EXAM_TIMETABLE_2026]
     return {
         'today': today.isoformat(),
         'onboarded': bool(subjects),
         'exams': exams,
-        'next_exam': _next_exam(exams),
+        'next_exam': _find_next_exam(exams),
         'no_exam_subjects': [s for s in uncovered if s in NO_WRITTEN_EXAM],
         'not_covered': [s for s in uncovered if s not in NO_WRITTEN_EXAM],
         'source_url': EXAM_SOURCE_URL,

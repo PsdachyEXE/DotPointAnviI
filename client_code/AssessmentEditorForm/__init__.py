@@ -11,12 +11,19 @@ itself is the frame. One form, four modes via the `mode` constructor arg
   mode='edit'    - load an existing assessment by id and save changes (FR04).
   mode='preview' - prefill from an nlp.parse_text() result dict; show the
                    confidence chip and per-field 'why' provenance (FR17).
-  mode='bulk'    - paste many lines, parse them all, tick the createable ones
-                   and insert them atomically (FR18).
+  mode='bulk'    - paste many lines, parse them all, tick the ones to keep and
+                   insert every line that validates (FR02).
 
 ParserPreviewForm was dropped from the design; its preview-before-commit role is
 this form in 'preview' mode. Save raises 'x-close-alert' so the parent alert()
-returns the new/updated assessment id; Cancel returns None.
+returns the new/updated assessment id — except in bulk mode, where the value is
+the NUMBER of assessments actually inserted. Cancel returns None, or that same
+count when a bulk run has already written rows, so the dashboard still refreshes.
+
+Every mode checks the form before it calls the server (FR03): the message lands
+beside the offending field via common.set_field_error rather than arriving as a
+toast after a round trip (FR04). Nothing gates on parser confidence — a LOW
+parse is exactly what 'preview' mode exists to let the student hand-correct.
 
 Layout is composed from the shared UI kit (client_code/common, spec section 14)
 rather than styled here. Two consequences worth defending:
@@ -37,10 +44,10 @@ from anvil import (
     CheckBox, Button,
 )
 from ..common import (
-    CONF_TONE, fmt_date, from_iso, get_session_settings, make_chip,
-    make_divider, make_empty_state, make_field, make_list_card,
-    make_page_title, make_row, make_section_header, make_toolbar,
-    toast, toast_error, toast_warn,
+    CONF_TONE, clear_field_errors, fmt_date, friendly_error, from_iso,
+    get_session_settings, make_chip, make_divider, make_empty_state, make_field,
+    make_list_card, make_page_title, make_row, make_section_header,
+    make_toolbar, set_field_error, toast, toast_error, toast_warn,
 )
 
 # Full canonical catalog (mirror of _constants.CANONICAL_SUBJECTS plus the
@@ -86,9 +93,31 @@ STATUSES = (
     ('Not started', 'not_started'), ('In progress', 'in_progress'),
     ('Completed', 'completed'),
 )
-# Mirrors of the server enums (the client cannot import server modules; keep in
-# sync). The offline constants-integrity suite in docs/TESTING.md asserts
-# these still match server_code/_constants.py.
+
+# The stored values on their own. Membership of these is what makes a value
+# legal; the display label beside it is only what the student reads. Used to
+# check a value BEFORE it is put into a DropDown, so a value the list does not
+# offer can be reported instead of silently becoming the list's first item.
+TYPE_VALUES = frozenset(value for _label, value in TYPES)
+STATUS_VALUES = frozenset(value for _label, value in STATUSES)
+
+# The status a new assessment starts in (mirror of _constants.STATUS_DEFAULT).
+STATUS_DEFAULT = 'not_started'
+
+# Field bounds this form checks before it calls the server. Mirrors of
+# _constants.MAX_TITLE_LENGTH / MIN_WEIGHT / MAX_WEIGHT (the client cannot import
+# server modules; keep in sync). Both sides must use the SAME number: a client
+# bound that is tighter blocks a save the server would have accepted, and one
+# that is looser promises a save the server will refuse.
+MAX_TITLE_LENGTH = 200
+MIN_WEIGHT = 0.0
+MAX_WEIGHT = 100.0
+
+# Reminder offsets offered as pills, in display order. There is no server list to
+# mirror — the server bounds each offset with MIN_REMINDER_DAY/MAX_REMINDER_DAY
+# rather than enumerating choices — but SettingsForm offers the same five. The
+# offline constants-integrity suite asserts the two client copies still match
+# each other and that every option sits inside the server's accepted range.
 REMINDER_DAY_OPTIONS = (14, 7, 3, 2, 1)
 
 # Parser confidence -> chip tone, the date helpers and the page heading all come
@@ -107,6 +136,9 @@ class AssessmentEditorForm(ColumnPanel):
         self._prefill = prefill
         self._linked_note_ids = []
         self._note_titles = {}   # id -> title cache for the linked-note pills
+        # Rows written by bulk mode so far. Carried on the close event so a
+        # partial commit still tells the dashboard there is something new.
+        self._bulk_inserted = 0
 
         # The parser's per-field provenance (FR17), read once here so each
         # make_field() below can hang its own 'why' line under its control.
@@ -127,9 +159,17 @@ class AssessmentEditorForm(ColumnPanel):
             header.add_component(make_chip(conf, CONF_TONE.get(conf)))
         self.add_component(header)
 
+        # Each make_field() panel is kept, not just added: _validate_fields()
+        # needs the wrapper to hang a message under the control it belongs to.
+
         # --- title ---
+        # The cap is stated up front rather than only on rejection — a student
+        # should not have to fail a save to learn how long a title may be.
         self._title_tb = TextBox()
-        self.add_component(make_field('Title', self._title_tb))
+        self._title_field = make_field(
+            'Title', self._title_tb,
+            hint='Up to %d characters.' % MAX_TITLE_LENGTH, required=True)
+        self.add_component(self._title_field)
 
         # --- subject ---
         # The dropdown offers the student's locked subjects (spec §11) when
@@ -137,32 +177,51 @@ class AssessmentEditorForm(ColumnPanel):
         # hits) are appended on load so nothing becomes uneditable.
         self._subject_dd = DropDown(items=self._subject_items(),
                                     include_placeholder=True)
-        self.add_component(make_field('Subject', self._subject_dd,
-                                      hint=self._why_text('subject')))
+        self._subject_field = make_field('Subject', self._subject_dd,
+                                         hint=self._why_text('subject'),
+                                         required=True)
+        self.add_component(self._subject_field)
 
         # --- type ---
-        self._type_dd = DropDown(items=list(TYPES))
-        self.add_component(make_field('Type', self._type_dd,
-                                      hint=self._why_text('type')))
+        # include_placeholder so this control is able to show NOTHING. Without
+        # it a DropDown always reports one of its items, and _load() could not
+        # surface a stored value the list no longer offers without inventing an
+        # answer on the student's behalf — see _select_choice().
+        self._type_dd = DropDown(items=list(TYPES), include_placeholder=True)
+        # Previously implicit in "the first item wins"; stated here so adding the
+        # placeholder does not quietly change what a new assessment defaults to.
+        self._type_dd.selected_value = TYPES[0][1]
+        self._type_field = make_field('Type', self._type_dd,
+                                      hint=self._why_text('type'))
+        self.add_component(self._type_field)
 
         # --- due date ---
         self._due_dp = DatePicker(format='DD MMM YYYY')
-        self.add_component(make_field('Due date', self._due_dp,
-                                      hint=self._why_text('due_date')))
+        self._due_field = make_field('Due date', self._due_dp,
+                                     hint=self._why_text('due_date'),
+                                     required=True)
+        self.add_component(self._due_field)
 
         # --- start date (optional) ---
         self._start_dp = DatePicker(format='DD MMM YYYY')
-        self.add_component(make_field('Start date (optional)', self._start_dp))
+        self._start_field = make_field('Start date (optional)', self._start_dp)
+        self.add_component(self._start_field)
 
         # --- weight ---
+        # The range is shown as a hint, but only when the parser has nothing to
+        # say about this field — its provenance line is the more useful of the two.
         self._weight_tb = TextBox(type='number')
-        self.add_component(make_field('Weight (%)', self._weight_tb,
-                                      hint=self._why_text('weight')))
+        self._weight_field = make_field(
+            'Weight (%)', self._weight_tb,
+            hint=(self._why_text('weight')
+                  or 'A percentage between %g and %g.' % (MIN_WEIGHT, MAX_WEIGHT)))
+        self.add_component(self._weight_field)
 
         # --- status ---
-        self._status_dd = DropDown(items=list(STATUSES))
-        self._status_dd.selected_value = 'not_started'
-        self.add_component(make_field('Status', self._status_dd))
+        self._status_dd = DropDown(items=list(STATUSES), include_placeholder=True)
+        self._status_dd.selected_value = STATUS_DEFAULT
+        self._status_field = make_field('Status', self._status_dd)
+        self.add_component(self._status_field)
 
         # --- reminder pills ---
         # Toggle pills rather than a column of tickboxes: the five offsets are a
@@ -225,6 +284,36 @@ class AssessmentEditorForm(ColumnPanel):
             self._subject_dd.items = items
         self._subject_dd.selected_value = subject
 
+    def _select_choice(self, dropdown, field_panel, stored, allowed, field_label):
+        """Select a stored enum value, or select NOTHING and say why.
+
+        A value the list does not offer — a legacy Title-Case 'SAC', a typo made in
+        the Data Tables console, an empty cell on a row written before the column
+        existed — used to leave the control showing its FIRST item. _build_payload
+        then read that item straight back and wrote it on save, so simply opening a
+        record and pressing Save could quietly change what it said.
+
+        Selecting nothing makes the gap visible and puts the answer back where it
+        belongs: with the student, who is the only one here who knows it. The
+        subject field has always been defended this way (_select_subject); this is
+        the same defence for the other two dropdowns.
+        """
+        if stored in allowed:
+            dropdown.selected_value = stored
+            set_field_error(field_panel, None)
+            return
+        dropdown.selected_value = None
+        if stored:
+            set_field_error(
+                field_panel,
+                'This assessment has a %s this app no longer offers ("%s"). '
+                'Choose one from the list.' % (field_label.lower(), stored))
+        else:
+            set_field_error(
+                field_panel,
+                'This assessment has no %s recorded. Choose one from the list.'
+                % field_label.lower())
+
     def _why_text(self, key):
         """The parser's provenance string for a field, or None.
 
@@ -250,7 +339,8 @@ class AssessmentEditorForm(ColumnPanel):
             if f.get('subject') in SUBJECTS:
                 self._select_subject(f.get('subject'))
             if f.get('type'):
-                self._type_dd.selected_value = f.get('type')
+                self._select_choice(self._type_dd, self._type_field,
+                                    f.get('type'), TYPE_VALUES, 'Type')
             self._due_dp.date = f.get('due_date')
             if f.get('weight') is not None:
                 self._weight_tb.text = ('%g' % f.get('weight'))
@@ -260,16 +350,20 @@ class AssessmentEditorForm(ColumnPanel):
             try:
                 a = anvil.server.call('get_assessment', self._assessment_id)
             except Exception as e:
-                toast_error("Couldn't load assessment: %s" % e)
+                toast_error(friendly_error(
+                    e, fallback="Couldn't open that assessment. Try again."))
                 return
             self._title_tb.text = a.get('title') or ''
             self._select_subject(a.get('subject'))
-            self._type_dd.selected_value = a.get('type')
+            # Membership-checked, never assigned blind: see _select_choice().
+            self._select_choice(self._type_dd, self._type_field,
+                                a.get('type'), TYPE_VALUES, 'Type')
             self._due_dp.date = from_iso(a.get('due_date'))
             self._start_dp.date = from_iso(a.get('start_date'))
             if a.get('weight') is not None:
                 self._weight_tb.text = ('%g' % a.get('weight'))
-            self._status_dd.selected_value = a.get('status') or 'not_started'
+            self._select_choice(self._status_dd, self._status_field,
+                                a.get('status'), STATUS_VALUES, 'Status')
             self._desc_ta.text = a.get('description') or ''
             self._check_days(a.get('reminder_days') or default_days)
             self._linked_note_ids = list(a.get('linked_note_ids') or [])
@@ -295,7 +389,10 @@ class AssessmentEditorForm(ColumnPanel):
             'due_date': self._due_dp.date,
             'start_date': self._start_dp.date,
             'weight': weight,
-            'status': self._status_dd.selected_value or 'not_started',
+            # No `or STATUS_DEFAULT` fallback: substituting a default for a status
+            # the form could not read is the same silent rewrite _select_choice()
+            # exists to stop. _validate_fields() blocks the save instead.
+            'status': self._status_dd.selected_value,
             'description': (self._desc_ta.text or '').strip() or None,
             'reminder_days': sorted(
                 (d for d, cb in self._day_checks.items() if cb.checked), reverse=True),
@@ -308,12 +405,104 @@ class AssessmentEditorForm(ColumnPanel):
             payload['term_info'] = self._prefill.get('fields', {}).get('term_info')
         return payload
 
+    # --- validation --------------------------------------------------------
+    def _validate_fields(self):
+        """Check the form on submit; True when it is worth calling the server.
+
+        ADDITIVE, never a replacement (docs/VALIDATION.md §6): every rule below is
+        also enforced by the server's _validate_assessment_payload, which stays the
+        authority. What checking here buys is WHERE the answer appears — beside the
+        field that is wrong, the moment Save is pressed (FR03/FR04) — instead of a
+        toast arriving after a round trip.
+
+        Runs on submit only. A message that appears while the student is still
+        typing the first letter of a title is worse than no message at all.
+
+        Deliberately says nothing about parser confidence. 'preview' mode exists so
+        a LOW-confidence parse can be hand-corrected, so a low score must never be
+        what stops a save.
+        """
+        clear_field_errors(self._title_field, self._subject_field,
+                           self._type_field, self._due_field, self._start_field,
+                           self._weight_field, self._status_field)
+
+        # Collected rather than reported one at a time, and in the order the fields
+        # appear on screen: one Save then names every problem, and the cursor can
+        # be sent to the first of them.
+        problems = []
+
+        title = (self._title_tb.text or '').strip()
+        if not title:
+            problems.append((self._title_field, 'Title is required.'))
+        elif len(title) > MAX_TITLE_LENGTH:
+            problems.append((
+                self._title_field,
+                'Title is too long — keep it to %d characters or fewer '
+                '(currently %d).' % (MAX_TITLE_LENGTH, len(title))))
+
+        # The subject DropDown carries a placeholder, so "not chosen yet" arrives
+        # here as None. That is a student who has not answered, not a student who
+        # answered wrongly, and it must not be reported as an invalid subject.
+        if not self._subject_dd.selected_value:
+            problems.append((self._subject_field, 'Choose a subject.'))
+
+        if self._type_dd.selected_value not in TYPE_VALUES:
+            problems.append((self._type_field, 'Choose a type.'))
+
+        due_date = self._due_dp.date
+        if due_date is None:
+            problems.append((self._due_field, 'Due date is required.'))
+
+        start_date = self._start_dp.date
+        if start_date is not None and due_date is not None and start_date > due_date:
+            # Both dates are fine on their own; only the pair is wrong.
+            problems.append((
+                self._start_field,
+                'Start date cannot be after Due date. Check the two dates.'))
+
+        weight_text = self._weight_tb.text
+        weight_text = str(weight_text).strip() if weight_text is not None else ''
+        if weight_text:
+            try:
+                weight = float(weight_text)
+            except (ValueError, TypeError):
+                problems.append((self._weight_field, 'Weight must be a number.'))
+            else:
+                if not (MIN_WEIGHT <= weight <= MAX_WEIGHT):
+                    problems.append((
+                        self._weight_field,
+                        'Weight (%%) must be between %g and %g (you entered %g).'
+                        % (MIN_WEIGHT, MAX_WEIGHT, weight)))
+
+        if self._status_dd.selected_value not in STATUS_VALUES:
+            problems.append((self._status_field, 'Choose a status.'))
+
+        for field_panel, message in problems:
+            set_field_error(field_panel, message)
+        if not problems:
+            return True
+
+        # Put the cursor in the first offending control so its message is on screen
+        # even when the dialog is scrolled past it. No toast: the message belongs
+        # beside the field (FR04), and repeating it in the corner would say the
+        # same thing twice.
+        try:
+            problems[0][0].input_component.focus()
+        except Exception:
+            pass
+        return False
+
     # --- handlers ----------------------------------------------------------
     def _on_save_click(self, **event_args):
+        if not self._validate_fields():
+            return
         try:
             payload = self._build_payload()
         except (ValueError, TypeError):
-            toast_error("Weight must be a number.")
+            # Unreachable while _validate_fields() runs first (it is what proves
+            # the weight parses); kept so a later change there cannot put a raw
+            # traceback in front of the student.
+            set_field_error(self._weight_field, 'Weight must be a number.')
             return
         try:
             if self._mode == 'edit':
@@ -322,13 +511,16 @@ class AssessmentEditorForm(ColumnPanel):
             else:
                 result_id = anvil.server.call('create_assessment', payload)
         except Exception as e:
-            toast_error(str(e))
+            toast_error(friendly_error(e))
             return
         toast("Assessment saved.")
         self.raise_event('x-close-alert', value=result_id)
 
     def _on_cancel_click(self, **event_args):
-        self.raise_event('x-close-alert', value=None)
+        # Cancel means "no new id" everywhere except bulk mode, where rows may
+        # already have been committed before the student closed the dialog; the
+        # count goes back so the dashboard still refreshes and shows them.
+        self.raise_event('x-close-alert', value=self._bulk_inserted or None)
 
     # --- linked notes (FR12) -----------------------------------------------
     def _on_note_search(self, **event_args):
@@ -336,7 +528,8 @@ class AssessmentEditorForm(ColumnPanel):
         try:
             notes = anvil.server.call('search_notes', query=query or None)
         except Exception as e:
-            toast_error("Couldn't search notes: %s" % e)
+            toast_error(friendly_error(
+                e, fallback="Couldn't search your notes. Try again."))
             return
         self._note_results.clear()
         if not notes:
@@ -387,7 +580,12 @@ class AssessmentEditorForm(ColumnPanel):
 
     # --- bulk mode ---------------------------------------------------------
     def _build_bulk(self):
-        """Paste-many UI: parse each line, tick the createable ones, insert atomically."""
+        """Paste-many UI: parse each line, tick the createable ones, insert them.
+
+        Per line, not all-or-nothing: create_bulk_assessments commits every record
+        that validates and reports the rest (FR02), so one bad line no longer
+        discards a whole screen of correctly parsed assessments.
+        """
         self.add_component(make_page_title(
             'Bulk add assessments',
             'Paste one assessment per line, then Parse all.'))
@@ -404,7 +602,10 @@ class AssessmentEditorForm(ColumnPanel):
 
         self._multi_panel = ColumnPanel()
         self.add_component(self._multi_panel)
-        self._multi_rows = []   # [(parsed, checkbox), ...]
+        # One entry per parsed line: the parse itself (which carries the line
+        # number), its tick box, the row the chips sit in, and the hidden label a
+        # server rejection is written into.
+        self._multi_rows = []   # [{'parsed', 'check', 'row', 'mark'}, ...]
 
         self.add_component(make_divider())
         cancel_btn = Button(text='Cancel', role='secondary')
@@ -413,12 +614,60 @@ class AssessmentEditorForm(ColumnPanel):
         create_btn.set_event_handler('click', self._on_bulk_create_click)
         self.add_component(make_row(cancel_btn, create_btn))
 
-    def _createable(self, parsed):
-        """A parsed line can auto-create only with a valid subject and a due date."""
+    def _blocking_reason(self, parsed):
+        """Why a parsed line cannot be ticked by default, or None when it can.
+
+        Mirrors what the server's _validate_assessment_payload will actually
+        demand, so a line that arrives ticked is one it will accept. It used to
+        ask only about the confidence, the subject and the due date, which left
+        the title and the weight range to be discovered as a rejection AFTER the
+        student had pressed Create.
+
+        The student can still tick any line by hand — this decides the default,
+        not what is allowed.
+        """
+        if parsed.get('confidence') == 'LOW':
+            return 'LOW confidence'
+
         f = parsed.get('fields', {})
-        return (parsed.get('confidence') != 'LOW'
-                and f.get('subject') in SUBJECTS
-                and f.get('due_date') is not None)
+        title = f.get('title')
+        title = title.strip() if isinstance(title, str) else ''
+        if not title:
+            return 'needs a title'
+        if len(title) > MAX_TITLE_LENGTH:
+            return 'title too long'
+        if f.get('subject') not in SUBJECTS:
+            return 'needs a subject'
+        if f.get('type') not in TYPE_VALUES:
+            return 'needs a type'
+        if f.get('due_date') is None:
+            return 'needs a due date'
+
+        weight = f.get('weight')
+        if weight is not None:
+            if isinstance(weight, bool) or not isinstance(weight, (int, float)):
+                return 'weight must be a number'
+            if not (MIN_WEIGHT <= weight <= MAX_WEIGHT):
+                return 'weight must be %g-%g' % (MIN_WEIGHT, MAX_WEIGHT)
+        return None
+
+    def _createable(self, parsed):
+        """True when the server would accept this line as parsed."""
+        return self._blocking_reason(parsed) is None
+
+    def _line_label(self, parsed):
+        """'Line 7' — the line's position in what the student actually PASTED.
+
+        parse_bulk carries this through as 'line_index' (0-based over the original
+        paste, blank lines included). It has to be carried, because a rejection's
+        'index' is a position in the list of TICKED records: the two stop agreeing
+        the moment one line is left unticked, and reporting the wrong one sends the
+        student to a line of their own paste that is perfectly fine.
+        """
+        line_index = parsed.get('line_index')
+        if isinstance(line_index, int) and not isinstance(line_index, bool):
+            return 'Line %d' % (line_index + 1)
+        return 'One line'
 
     def _on_bulk_parse_click(self, **event_args):
         text = (self._bulk_ta.text or '').strip()
@@ -428,7 +677,8 @@ class AssessmentEditorForm(ColumnPanel):
         try:
             results = anvil.server.call('parse_bulk', text)
         except Exception as e:
-            toast_error("Couldn't parse: %s" % e)
+            toast_error(friendly_error(
+                e, fallback="Couldn't read those lines. Try again."))
             return
         self._render_multi(results)
 
@@ -453,24 +703,60 @@ class AssessmentEditorForm(ColumnPanel):
                 f.get('type') or '?', fmt_date(f.get('due_date')))
             if f.get('weight') is not None:
                 summary += ' · %g%%' % f.get('weight')
-            row = make_row(cb, make_chip(conf, CONF_TONE.get(conf)),
+            row = make_row(make_chip(self._line_label(parsed)), cb,
+                           make_chip(conf, CONF_TONE.get(conf)),
                            Label(text=summary))
             if not createable:
                 # Why this line came in unticked, as a plain 'bad' chip. It used
                 # to be a Label with two roles, and two !important colour rules
                 # at the same specificity are decided by stylesheet order — the
                 # chip is one role, and matches every other status chip.
-                reason = 'LOW confidence' if conf == 'LOW' else 'needs subject + due date'
-                row.add_component(make_chip(reason, 'bad'))
+                row.add_component(make_chip(self._blocking_reason(parsed), 'bad'))
+            # Created hidden and up front, the way make_field() creates its error
+            # label: a rejection then has somewhere to land without re-flowing the
+            # dialog, and it can be cleared and rewritten on the next attempt.
+            mark = Label(text='', role='fielderror', visible=False)
             card.add_component(row)
+            card.add_component(mark)
             self._multi_panel.add_component(card)
-            self._multi_rows.append((parsed, cb))
+            self._multi_rows.append(
+                {'parsed': parsed, 'check': cb, 'row': row, 'mark': mark})
+
+    def _mark_created(self, entry):
+        """Lock a line the server has written, so Create cannot insert it twice.
+
+        Unticking alone would not do: the student can tick it again. This is the
+        guard that makes a partial commit safe to retry — without it, fixing one
+        bad line and pressing Create a second time would duplicate every line that
+        went in the first time.
+        """
+        if not entry['check'].enabled:
+            return
+        entry['check'].checked = False
+        entry['check'].enabled = False
+        entry['row'].add_component(make_chip('added', 'ok'))
+
+    def _mark_rejected(self, entry, reason):
+        """Write the server's reason beside the line it belongs to; return its label.
+
+        Left ticked on purpose: the line still has to go in once it is fixed.
+        """
+        label = self._line_label(entry['parsed'])
+        entry['mark'].text = '%s: %s' % (label, reason)
+        entry['mark'].visible = True
+        return label
 
     def _on_bulk_create_click(self, **event_args):
         records = []
-        for parsed, cb in self._multi_rows:
-            if not cb.checked:
+        submitted = []   # the entry behind each record, in the same order
+        for entry in self._multi_rows:
+            # Stale marks are wiped before every attempt, the same way the single
+            # editor clears its field errors before re-validating.
+            entry['mark'].text = ''
+            entry['mark'].visible = False
+            if not entry['check'].checked:
                 continue
+            parsed = entry['parsed']
             f = parsed.get('fields', {})
             records.append({
                 'title': f.get('title'),
@@ -482,18 +768,55 @@ class AssessmentEditorForm(ColumnPanel):
                 'source_text': parsed.get('source_text'),
                 'term_info': f.get('term_info'),
             })
+            submitted.append(entry)
         if not records:
             toast_warn("Nothing ticked to create.")
             return
         try:
             result = anvil.server.call('create_bulk_assessments', records)
         except Exception as e:
-            toast_error(str(e))
+            toast_error(friendly_error(e))
             return
-        if result.get('rejected'):
-            msgs = ', '.join('line %d: %s' % (r['index'] + 1, r['reason'])
-                             for r in result['rejected'])
-            toast_error("Some lines were invalid — nothing was saved. %s" % msgs)
+
+        inserted = result.get('inserted', 0)
+        rejected = result.get('rejected') or []
+        self._bulk_inserted += inserted
+
+        # create_bulk_assessments commits per line (FR02), so 'rejected' can be
+        # non-empty while rows were still written — the old "nothing was saved"
+        # message would now be a lie. Its 'index' is the record's position in the
+        # list this form sent, so every position it does NOT name went in.
+        reasons = {}
+        for rejection in rejected:
+            position = rejection.get('index')
+            if isinstance(position, int) and 0 <= position < len(submitted):
+                reasons[position] = rejection.get('reason')
+        # Only lock lines when every rejection could be placed. If one could not,
+        # it is no longer knowable which lines were written, and locking the wrong
+        # one would lose it.
+        placed_all = len(reasons) == len(rejected)
+
+        marked = []
+        for position, entry in enumerate(submitted):
+            if position in reasons:
+                marked.append(self._mark_rejected(entry, reasons[position]))
+            elif placed_all:
+                self._mark_created(entry)
+
+        if not rejected:
+            toast("Created %d assessment(s)." % inserted)
+            self.raise_event('x-close-alert', value=self._bulk_inserted)
             return
-        toast("Created %d assessment(s)." % result.get('inserted', 0))
-        self.raise_event('x-close-alert', value=result.get('inserted', 0))
+
+        # Both halves, honestly, and the dialog stays open so the lines that
+        # failed can be fixed and sent again. Each reason is written beside its own
+        # line above, so the toast only has to name them.
+        if placed_all:
+            detail = ('%s could not be added — the reason is beside each one.'
+                      % ', '.join(marked))
+        else:
+            detail = ' '.join(str(r.get('reason')) for r in rejected)
+        if inserted:
+            toast_error('Added %d of %d. %s' % (inserted, len(records), detail))
+        else:
+            toast_error('Nothing was added. %s' % detail)

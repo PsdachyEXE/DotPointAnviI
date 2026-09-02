@@ -55,6 +55,7 @@ import datetime
 import re
 
 from ._datetime import _get_tz, _safe_timezone
+from ._constants import MIN_REMINDER_DAY, MAX_REMINDER_DAY
 
 
 # --- format patterns -------------------------------------------------------
@@ -444,3 +445,21 @@ def is_positive_int(value):
     the number 1 and fire a spurious "1 day before" reminder.
     """
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def is_valid_reminder_day(value):
+    """Element predicate for safe_list: a reminder offset the app would still accept.
+
+    The read-side twin of the MIN/MAX_REMINDER_DAY write rule. It lives here, rather
+    than separately in each module that needs it, because three modules read a
+    reminder-days column — assessments.py, notes.py and reminders.py — and if their
+    read rules disagreed with the write rule (or with each other) a value could be
+    refused on save yet still act on the student's data. That is the inconsistency
+    rubric 7.3 is asking us to remove.
+
+    Being stricter than is_positive_int matters: a row written before the upper bound
+    existed can hold 999999, which made every assessment permanently "due soon" and
+    emailed the student about all of them.
+    """
+    return (is_positive_int(value)
+            and MIN_REMINDER_DAY <= value <= MAX_REMINDER_DAY)

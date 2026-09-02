@@ -11,8 +11,17 @@ on the same left edge, then the pin checkbox, then a Cancel/Save row.
 
 Tags are edited in place rather than in a sub-dialog: a text box + Add button,
 with the current tags rendered underneath as chips that each carry their own
-remove button. Content stays a plain TextArea (no markdown render - SRS
-plain-text constraint).
+remove button.
+
+Content stays a plain TextArea with no markdown rendering. This header used to
+call that an "SRS plain-text constraint", which is the wrong way round: FR10 in
+SAT 3_SRS2026 asks for MARKDOWN notes, and it is the design document (§4.2.2)
+that specifies plain text only. Plain text is what this build implements - the
+decision is recorded as discrepancy 6 in docs/DISCREPANCIES.md, where the doc
+governs because it also simplifies substring search and the export round trip
+(FR18/FR19). Existing markdown survives as raw text either way. The hint under
+the box says so plainly, so a student is never left typing **bold** and
+wondering why it stays literal.
 
 Save raises 'x-close-alert' with the note id; Cancel returns None. (The 300ms
 edit-mode autosave in the spec is deferred; Save is explicit for now.)
@@ -27,8 +36,20 @@ from anvil import ColumnPanel, TextBox, TextArea, CheckBox, Button
 
 from ..common import (
     make_chip, make_divider, make_field, make_page_title, make_row,
-    toast, toast_error,
+    toast, toast_error, set_field_error, clear_field_errors, friendly_error,
 )
+
+# --- field bounds (mirrors of server_code/_constants.py) ---------------------
+# The client cannot import server_code, so the four bounds this form can check
+# before uploading are restated here. The server re-checks all of them and
+# remains the authority; these exist so a 30,000-character paste is refused in
+# the browser instead of after the round trip, and so the student is told the
+# same limit either way. Keep in step with _constants.MAX_TITLE_LENGTH,
+# MAX_NOTE_CONTENT_LENGTH, MAX_TAG_LENGTH and MAX_TAGS_PER_NOTE.
+MAX_TITLE_LENGTH = 200
+MAX_NOTE_CONTENT_LENGTH = 20000
+MAX_TAG_LENGTH = 40
+MAX_TAGS_PER_NOTE = 20
 
 
 class NoteEditorForm(ColumnPanel):
@@ -48,13 +69,20 @@ class NoteEditorForm(ColumnPanel):
         self.add_component(make_page_title('New note' if mode == 'create'
                                            else 'Edit note'))
 
+        # The three field wrappers are kept on self, not just added and forgotten,
+        # because _validate() writes its messages into them (make_field gives each
+        # one a hidden error_label). Title is the only one marked required — it is
+        # the only field the server refuses to accept blank.
         self._title_tb = TextBox()
-        self.add_component(make_field('Title', self._title_tb))
+        self._title_field = make_field('Title', self._title_tb, required=True)
+        self.add_component(self._title_field)
 
         # 260px, not a role: a note body needs room to write a paragraph in (sizing, not styling).
         self._content_ta = TextArea(height='260px')
-        self.add_component(make_field('Content', self._content_ta,
-                                      hint='Plain text — markdown is not rendered.'))
+        self._content_field = make_field(
+            'Content', self._content_ta,
+            hint='Plain text — markdown is not rendered.')
+        self.add_component(self._content_field)
 
         # The tag editor is one field group. make_field lays its parts out as
         # caption -> component -> hint, so the add-row AND the chips have to go
@@ -69,9 +97,12 @@ class NoteEditorForm(ColumnPanel):
         tag_editor = ColumnPanel()
         tag_editor.add_component(make_row(self._tag_tb, add_tag_btn))
         tag_editor.add_component(self._tag_pills)
-        self.add_component(make_field(
+        self._tags_field = make_field(
             'Tags', tag_editor,
-            hint='Tags are how notes are filtered on the Notes page.'))
+            hint='Tags are how notes are filtered on the Notes page. '
+                 'Up to %d, each %d characters or fewer.'
+                 % (MAX_TAGS_PER_NOTE, MAX_TAG_LENGTH))
+        self.add_component(self._tags_field)
 
         # Left as a plain labelled checkbox: the label *is* the question, so
         # wrapping it in a make_field caption would just say it twice.
@@ -102,7 +133,8 @@ class NoteEditorForm(ColumnPanel):
         try:
             notes = anvil.server.call('search_notes')
         except Exception as e:
-            toast_error("Couldn't load note: %s" % e)
+            toast_error(friendly_error(
+                e, "Couldn't load that note. Close this and try again."))
             return
         note = next((n for n in notes if n['id'] == self._note_id), None)
         if note is None:
@@ -117,26 +149,127 @@ class NoteEditorForm(ColumnPanel):
         """Redraw the chip list from self._tags (the single source of truth)."""
         self._tag_pills.clear()
         for t in self._tags:
+            remove_tag_btn = Button(text='x', role='iconbtn')
             # tag=t is a default argument, not a closure over t: without it every
             # handler would capture the same final loop value and remove the
             # wrong tag.
-            x = Button(text='x', role='iconbtn')
-            x.set_event_handler('click', lambda tag=t, **e: self._remove_tag(tag))
-            self._tag_pills.add_component(make_row(make_chip('#%s' % t), x))
+            remove_tag_btn.set_event_handler(
+                'click', lambda tag=t, **e: self._remove_tag(tag))
+            self._tag_pills.add_component(
+                make_row(make_chip('#%s' % t), remove_tag_btn))
 
     def _remove_tag(self, tag):
         self._tags = [t for t in self._tags if t != tag]
+        # Removing a tag can be the fix for "too many tags", so clear that
+        # message rather than leave it contradicting what is now on screen.
+        set_field_error(self._tags_field, None)
         self._render_tags()
+
+    # --- validation --------------------------------------------------------
+    # Client-side checks are a fast, friendly FIRST pass; notes._validate_note_fields
+    # runs the same rules server-side and stays the authority. The wording is copied
+    # from there deliberately, so a student who trips a rule in the browser and the
+    # same rule on the server is told the same thing twice, not two different things.
+
+    def _validate(self):
+        """Check the fields on SUBMIT; show any message beside its own box.
+
+        Returns True when the note is safe to send. Deliberately not run on every
+        keystroke — "Title is required." appearing while the student is still
+        typing the first letter is worse than nothing.
+        """
+        clear_field_errors(self._title_field, self._content_field,
+                           self._tags_field)
+
+        title = (self._title_tb.text or '').strip()
+        # Measured on the stripped text because that is what the server stores
+        # and therefore what it measures.
+        content = (self._content_ta.text or '').strip()
+
+        first_bad_field = None
+
+        if not title:
+            set_field_error(self._title_field, 'Title is required.')
+            first_bad_field = self._title_field
+        elif len(title) > MAX_TITLE_LENGTH:
+            set_field_error(self._title_field,
+                            'Title is too long — keep it to %d characters or '
+                            'fewer (currently %d).'
+                            % (MAX_TITLE_LENGTH, len(title)))
+            first_bad_field = self._title_field
+
+        if len(content) > MAX_NOTE_CONTENT_LENGTH:
+            set_field_error(self._content_field,
+                            'Content is too long — keep it to %d characters or '
+                            'fewer (currently %d).'
+                            % (MAX_NOTE_CONTENT_LENGTH, len(content)))
+            first_bad_field = first_bad_field or self._content_field
+
+        # Tags are guarded as they are added, so this is the backstop for a note
+        # loaded from a row that already breaks the rule.
+        tag_message = self._tag_list_error(self._tags)
+        if tag_message:
+            set_field_error(self._tags_field, tag_message)
+            first_bad_field = first_bad_field or self._tags_field
+
+        if first_bad_field is None:
+            return True
+        # The dialog is tall enough to scroll, so put the cursor in the first
+        # offending box: the message is no use if it is below the fold.
+        try:
+            first_bad_field.input_component.focus()
+        except Exception:
+            pass  # focus is a courtesy, never a reason to block the save
+        return False
+
+    def _tag_list_error(self, tags):
+        """Return the message for an unusable set of tags, or None."""
+        for tag in tags:
+            if len(tag) > MAX_TAG_LENGTH:
+                return ('Tag is too long — keep it to %d characters or fewer '
+                        '(currently %d).' % (MAX_TAG_LENGTH, len(tag)))
+        if len(tags) > MAX_TAGS_PER_NOTE:
+            return ('A note can have at most %d tags (this one has %d).'
+                    % (MAX_TAGS_PER_NOTE, len(tags)))
+        return None
 
     # --- handlers ----------------------------------------------------------
     def _on_add_tag(self, **event_args):
+        """Add the typed tag, or say why it was not added.
+
+        Adding a tag IS a submit for this sub-field, so it is the right moment to
+        check one. Silently dropping a too-long or duplicate tag (which is what
+        this did before) looks exactly like a broken Add button.
+        """
+        set_field_error(self._tags_field, None)
         tag = (self._tag_tb.text or '').strip()
-        if tag and tag.lower() not in [t.lower() for t in self._tags]:
-            self._tags.append(tag)
+        if not tag:
+            return  # an empty box is a mis-click, not an error worth a message
+
+        if len(tag) > MAX_TAG_LENGTH:
+            set_field_error(self._tags_field,
+                            'Tag is too long — keep it to %d characters or '
+                            'fewer (currently %d).'
+                            % (MAX_TAG_LENGTH, len(tag)))
+            return
+        # Case-insensitive, matching the server's de-duplication rule.
+        if tag.lower() in [t.lower() for t in self._tags]:
+            set_field_error(self._tags_field,
+                            'This note already has the tag "%s".' % tag)
+            return
+        if len(self._tags) >= MAX_TAGS_PER_NOTE:
+            set_field_error(self._tags_field,
+                            'A note can have at most %d tags. Remove one before '
+                            'adding another.' % MAX_TAGS_PER_NOTE)
+            return
+
+        self._tags.append(tag)
         self._tag_tb.text = ''
         self._render_tags()
 
     def _on_save_click(self, **event_args):
+        if not self._validate():
+            return
         record = {
             'title': (self._title_tb.text or '').strip(),
             'content': self._content_ta.text or '',
@@ -150,7 +283,12 @@ class NoteEditorForm(ColumnPanel):
             else:
                 result_id = anvil.server.call('create_note', record)
         except Exception as e:
-            toast_error(str(e))
+            # The server's validators speak to the student; anything else (a
+            # dropped connection, a platform error) is replaced by a sentence
+            # that can actually be acted on. No field is named, because a failure
+            # that gets this far is not about one box.
+            toast_error(friendly_error(
+                e, "Couldn't save that note. Please try again."))
             return
         toast("Note saved.")
         # The caller (NotesForm) decides what to do with the id; the dialog's

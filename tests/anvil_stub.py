@@ -370,9 +370,39 @@ def reset():
 # Building the fake `anvil` package
 # ---------------------------------------------------------------------------
 
+class BlobMedia(object):
+    """Anvil's downloadable-file object, as returned by export_user_data().
+
+    Real BlobMedia carries bytes plus a content type and filename, and the browser
+    turns it into a download. Offline the interesting part is the content, so this
+    keeps all three and exposes get_bytes() so a test can assert on what was exported.
+    """
+
+    def __init__(self, content_type, content, name=None):
+        self.content_type = content_type
+        self.name = name
+        if isinstance(content, str):
+            content = content.encode('utf-8')
+        self._content = content
+
+    def get_bytes(self):
+        return self._content
+
+    def get_content_type(self):
+        return self.content_type
+
+    def get_name(self):
+        return self.name
+
+    def __len__(self):
+        return len(self._content)
+
+
 def _build_modules():
     """Construct every anvil.* module object the server code imports."""
     anvil_mod = types.ModuleType('anvil')
+    anvil_mod.BlobMedia = BlobMedia
+    anvil_mod.Media = BlobMedia
 
     # -- anvil.server: decorators are identity, so the decorated function stays
     #    directly callable from a test.
@@ -434,7 +464,9 @@ def _build_modules():
     users_mod = types.ModuleType('anvil.users')
     users_mod.UserExists = UserExists
     users_mod.AuthenticationFailed = AuthenticationFailed
-    users_mod.get_user = lambda: _current_user
+    # allow_remembered is accepted because _auth._require_user passes it; offline
+    # there is no cookie to remember, so it makes no difference to the answer.
+    users_mod.get_user = lambda allow_remembered=False: _current_user
 
     def signup_with_email(email, password, remember=False):
         """Create a users row, or raise UserExists — as the real service does."""

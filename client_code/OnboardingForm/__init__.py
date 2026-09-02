@@ -32,17 +32,41 @@ from anvil import ColumnPanel, Label, Button, confirm, open_form
 
 from ..common import (
     SubjectPicker, set_session_settings, apply_theme, _sign_out,
-    navigate, toast, toast_error, toast_warn,
+    navigate, toast, toast_error, toast_warn, friendly_error,
     make_page, make_card, make_page_title, make_section_header, make_row,
     make_empty_state,
 )
 
-# Mirrors _constants.ENGLISH_GROUP / MATHS_GROUP (client can't import server
-# modules; keep in sync).
+# --- mirrors of server constants --------------------------------------------
+# Anvil client code cannot import a server module, so these two tuples are hand
+# copies. Each one names the constant it copies so the original is findable:
+#
+#   ENGLISH_GROUP  copies  server_code/_constants.py  ENGLISH_GROUP
+#   MATHS_GROUP    copies  server_code/_constants.py  MATHS_GROUP
+#
+# They must hold EXACTLY what the server holds, because notes._clean_subjects
+# applies the same two membership tests to the same selection: any entry missing
+# here is a selection this form rejects and the server would have accepted.
+# MATHS_GROUP was missing 'Mathematics' (the parser's generic maths study), which
+# is exactly that bug. Copying 'Mathematics' cannot put a non-study in front of
+# the student — the picker is built from the server's SUBJECT_GROUPS, which
+# deliberately omits it — it only makes the client's answer to "have you picked
+# a maths study?" identical to the server's.
 ENGLISH_GROUP = ('English', 'English as an Additional Language',
                  'English Language', 'Literature')
-MATHS_GROUP = ('Foundation Mathematics', 'General Mathematics',
+MATHS_GROUP = ('Mathematics', 'Foundation Mathematics', 'General Mathematics',
                'Mathematical Methods', 'Specialist Mathematics')
+
+# The two VCE program rules, worded ONCE. The same sentences appear in
+# SettingsForm, and the maths sentence is word-for-word the one
+# notes._clean_subjects raises, so a student meets one wording for one rule no
+# matter which screen they are on and no matter which side caught them.
+MATHS_RULE_MESSAGE = ('Select at least one mathematics study '
+                      '(Foundation, General, Methods or Specialist).')
+ENGLISH_RULE_MESSAGE = ("You haven't picked an English-group study. Every VCE "
+                        "program includes one, so 'English' will be added "
+                        "automatically. Continue?")
+NO_SELECTION_MESSAGE = 'Pick your subjects first.'
 
 
 class OnboardingForm(ColumnPanel):
@@ -77,14 +101,17 @@ class OnboardingForm(ColumnPanel):
         try:
             catalog = anvil.server.call('get_subject_catalog')
         except Exception as e:
-            # Same split as the rest of the app: the toast carries the raw
-            # server error (useful when debugging), the panel carries a sentence
-            # the student can actually act on.
+            # friendly_error, not str(e): this is the very first screen a new
+            # student sees, and the raw failure here is an Anvil transport
+            # string, never a sentence written for them. Anything the server
+            # DID write for them still passes straight through.
             #
             # The router re-renders this form for every hash while the user is
             # un-onboarded, so a dead-end here would trap them behind the
             # onboarding gate: keep BOTH escape hatches — retry and sign out.
-            toast_error("Couldn't load the subject list: %s" % e)
+            toast_error(friendly_error(
+                e, "Couldn't load the subject list. Check your connection and "
+                   "try again."))
             card.add_component(make_empty_state(
                 "Couldn't load the subject list",
                 'Check your connection and try again.',
@@ -122,25 +149,30 @@ class OnboardingForm(ColumnPanel):
 
         # Validate in the order the student would fix things: something chosen,
         # then maths, then the English warning (which is a confirm, not a block,
-        # because the server can repair it by appending 'English').
+        # because the server can repair it by appending 'English'). Same three
+        # checks, same order, same sentences as the Settings change-subjects
+        # flow — the rule must not read differently depending on the screen.
+        # There is no field to hang a message on (the picker is one component
+        # covering the whole card), so these are toasts by necessity.
         if not selection:
-            toast_warn("Pick your subjects first.")
+            toast_warn(NO_SELECTION_MESSAGE)
             return
         if not any(s in MATHS_GROUP for s in selection):
-            toast_error("Select at least one mathematics study — DotPoint "
-                        "needs one in every program.")
+            toast_error(MATHS_RULE_MESSAGE)
             return
         if not any(s in ENGLISH_GROUP for s in selection):
-            proceed = confirm(
-                "You haven't picked an English-group study. Every VCE program "
-                "includes one, so 'English' will be added automatically. Continue?")
-            if not proceed:
+            if not confirm(ENGLISH_RULE_MESSAGE):
                 return
 
         try:
             settings = anvil.server.call('set_subjects', selection)
         except Exception as e:
-            toast_error(str(e))
+            # The server's subject rules raise sentences written for the
+            # student, so friendly_error shows them unchanged; a dropped
+            # connection gets the fallback instead of a transport string.
+            toast_error(friendly_error(
+                e, "Couldn't lock in those subjects. Check your connection "
+                   "and try again."))
             return
 
         # set_subjects returns the saved settings row, so push it straight into
