@@ -22,6 +22,7 @@ SUITE_MODULES = [
     'tests.test_notes',
     'tests.test_nlp',
     'tests.test_constants_integrity',
+    'tests.test_readme',
 ]
 
 
