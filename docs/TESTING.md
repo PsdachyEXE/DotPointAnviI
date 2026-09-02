@@ -168,6 +168,31 @@ themes**, after each push (the GitHub webhook auto-syncs Anvil):
 | 15 | **Browser Back** | Dashboard → Notes → Exams → Back lands on `#notes` with the right active tab and exactly **one** rendered top bar (no double render) |
 | 16 | **Mobile** | 768px and 375px: the three panels stack, the calendar fits (48px cells at 375px), no horizontal overflow, top bar 63px instead of 169px |
 
+## 3d. Live journeys — validation and documentation pass (criterion 7)
+
+Performed 2 September 2026 in the **published** app
+(https://honored-willing-tea.anvil.app) as `claude.tester@dotpoint.dev`, immediately
+after the GitHub push auto-synced into Anvil. Anvil form code is runtime-checked, not
+compile-checked, so the new `make_field(required=True)` argument, the `set_field_error`
+channel and the `role='fielderror'` stylesheet rule could only be proven this way.
+
+| # | Journey | Result |
+|---|---|---|
+| 1 | **No regression on load.** Dashboard after sign-in compared against the screenshot taken before any change | Identical: 16 assessments shown, same filter/sort bar, September 2026 calendar with the 2nd ringed and a count badge on the 7th, "Physics SAC3 · 07 Sep 2026" in Next 30 Days, next-exam chip "English — Written examination · in 55 days" |
+| 2 | **Required markers render.** Sign-in dialog, and Add assessment | "Email \*" / "Password \*"; "Title \*", "Subject \*", "Due date \*" marked, and "Start date (optional)" correctly NOT marked |
+| 3 | **Field hints appear before the student types** | "Up to 200 characters." under Title; "A percentage between 0 and 100." under Weight — previously the cap was only discovered by failing |
+| 4 | **Submit is blocked with empty required fields (SRS FR03)** | Save produced no server call. Three messages, each in red beneath its own field: "Title is required.", "Choose a subject.", "Due date is required." |
+| 5 | **The message describes the right problem** | An unselected subject reads "Choose a subject." — the server's old text was "invalid subject", which describes a different fault |
+| 6 | **Messages are re-evaluated, not stale** | Filling only the Title and pressing Save again cleared the Title message while leaving the Subject and Due date messages in place |
+| 7 | **Range check fires client-side, quoting the value** | Weight 150 → "Weight (%) must be between 0 and 100 (you entered 150)." beneath the Weight box, with no round trip |
+| 8 | **Errors appear beside the field, not in a toast (SRS FR04)** | All four messages rendered inline via the new `fielderror` role; the toast stack stayed empty |
+| 9 | **The flagship parser workflow is unbroken** | "Methods SAC2 due Friday week 5 worth 25%" → preview with a HIGH badge, Title "Methods SAC2", Subject Mathematical Methods, Type SAC, Due date 04 Sep 2026, each with its provenance line ("matched \"friday\" → 04 Sep 2026"). The new required markers coexist with a parsed preview without blocking it |
+| 10 | **`_validation` module synced** | Visible in the Anvil IDE Server Code list; every screen that calls it renders |
+
+The risk this pass was watching for was that a pre-submit check would block
+`mode='preview'`, since that mode exists precisely so a student can hand-correct a
+LOW-confidence parse. Journey 9 confirms it does not.
+
 ## 4. Defects found → fixed → re-tested
 
 | # | Found by | Defect | Fix | Re-test |
@@ -198,6 +223,17 @@ themes**, after each push (the GitHub webhook auto-syncs Anvil):
 Config/platform issues resolved en route: Users service missing
 `user_table` binding; unavailable `python310-full` base-image pin; database
 schema migration (`users` table server permission); GitHub token re-auth.
+| 23 | Criterion 7 audit + offline suite | **A stored timezone the tz database cannot resolve took the whole app down.** `_user_now()` passed `user_settings.timezone` straight into `ZoneInfo()`/`pytz.timezone()` with no guard. Every screen calls that function, so one bad cell — reachable by a Data Tables console edit, or an import whose settings patch was swallowed — made the app unusable, *including the Settings page that is the only way to correct the value* | `_datetime._safe_timezone()` resolves the stored name and falls back to `Australia/Melbourne` when it cannot; `_user_now` also tolerates the column not existing yet | `tests/test_datetime.py` drives seven damaged values (a plausible typo, `None`, a number, a list, a pre-migration row that raises on lookup) and asserts none raises, while a valid `Australia/Perth` is still honoured |
+| 24 | Criterion 7 audit + offline suite | **The app could tell a student reminders were OFF and keep emailing them.** `user_settings.notifications_enabled` was read two ways: `bool()` on the Settings screen (so `None` drew the switch off) and `is False` in the dispatcher (so `None` meant keep sending) | Both readers now use `_validation.safe_bool(..., default=False)` — failing closed, because an unsent reminder is a nuisance and an unwanted one is worse | `tests/test_reminders.py` sets the column to `None`, `'yes'`, `0`, `1` and `''` and asserts nothing is sent in any case |
+| 25 | Criterion 7 audit + offline suite | **One corrupt column silently skipped a student's entire remaining run.** A hand-edited `reminder_days` holding `7` instead of `[7]` raised `TypeError` inside `_process_user`, which the per-user handler counted and moved on from — abandoning every assessment after it | `_get_due_thresholds` sanitises through `safe_list(..., is_positive_int)`; a corrupt column yields no thresholds instead of raising | Offline: five corrupt shapes assert no raise; a part-corrupt `[7, 'x', None, 2]` still fires both good thresholds |
+| 26 | Criterion 7 audit + offline suite | **`"in 99999999999 days"` crashed the parser.** The `(\d+)` capture was unbounded and went straight into `timedelta`, which raises `OverflowError` past ~999,999,999 days | The captured count is bounded to the same five-year horizon the validator uses; past it the phrase is treated as "not a date" and falls through, rather than raising or fabricating a date decades away | `tests/test_nlp.py` parses four hostile counts without raising, and asserts `"in 10 days"` still resolves |
+| 27 | Criterion 7 audit | **Bulk add contradicted the project's own SRS.** `create_bulk_assessments` was all-or-nothing, but FR02 reads "Valid lines still commit so a single bad line does not block the rest" — and the design document's §3.3.6 pseudocode agrees. Both source documents said one thing and the code did the opposite | Per-line commit: valid records are inserted, invalid ones returned with their index and reason | `tests/test_assessments.py` sends a three-line batch with one bad line and asserts exactly the two good rows exist |
+| 28 | Criterion 7 audit | **Bulk rejections pointed at the wrong line of the student's paste.** The message printed the index in the ticked-only records list as if it were the source line number; with any unticked line the two diverge | `parse_bulk` carries a real `line_index` through from the original paste | Offline: a paste with a blank middle line asserts indices `[0, 2]`, i.e. numbering that reflects the original text |
+| 29 | Criterion 7 audit | **Editing an assessment could silently rewrite it.** A stored `type` or `status` outside the current enum was assigned to a DropDown that did not offer it; the control fell back to its first item and `_build_payload` wrote that back on save. The same method already defended `subject`, so this was an internal inconsistency as well as a defect | Membership is checked before assigning; an unrecognised stored value selects nothing and reports itself to the student rather than being substituted | Offline: `safe_choice` asserted to pin an off-enum value to the default; live: an edit round-trip preserves type and status |
+| 30 | Criterion 7 audit | **`get_*` raised where `delete_*` returned `False`** for the identical missing-row condition, inside the same module — a quotable breach of 7.3's "no inconsistencies are present" | All by-id paths raise the same student-facing sentence | Offline: the three assessment paths and the three note paths are asserted to raise, and to raise the *same* message |
+| 31 | Criterion 7 audit | **Reminder offsets had no upper bound.** `[999999]` passed every check, and made an assessment permanently "due soon" — emailing the student about all of them on the first tick. The read guard accepted it too, so a stored value bypassed the new write rule | `MIN_/MAX_REMINDER_DAY` bounds on write, and one shared `is_valid_reminder_day` predicate used by the three modules that read the column | Offline: rejected on write; a stored `999999` is dropped on read |
+| 32 | Offline suite (tripwire) | **The client's copies of the server subject groups had drifted**, under a comment saying "keep in sync" | Mirrors corrected; `tests/test_constants_integrity.py` now reads the client forms with `ast` and asserts equality, and separately asserts the picker offers every canonical study and never the parser-only catch-all | The suite fails if either drifts again |
+| 33 | Criterion 7 audit | **Raw developer strings were shown to students at 23 sites**, six of them a bare `toast_error(str(e))` — so leaving the due date empty displayed the literal text `invalid date: None` | Server messages rewritten as sentences addressed to the student; `common.friendly_error()` is now the single place that decides what is fit to show, replacing anything that does not read as a written sentence | Offline: every family's rejection asserted to be sentence-shaped and free of developer terms; live: journeys 4–7 in §3d |
 
 ## 5. Security spot-checks
 

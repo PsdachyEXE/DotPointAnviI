@@ -789,21 +789,65 @@ def _list_assessments_impl(user, settings_row, filters: dict = None, sort: dict 
     preference, so an unusable value should quietly not narrow the list. Refusing to
     show a student their assessments because a saved filter has gone stale would be
     a worse answer than showing them all of it.
+
+    user          the owner row from _require_user. It is the one part of the
+                  query that is never optional and never removed, and it is what
+                  makes the search user-scoped (NFR03): every filter below
+                  NARROWS an already-scoped result, none of them can widen it.
+    settings_row  the caller's user_settings row, already fetched. Passed in
+                  rather than looked up so the dashboard, which is holding it
+                  anyway, does not pay for a second read (NFR01). Used once, at
+                  the end, to get the student's local today.
+    filters       optional dict. Recognised keys: subjects (list[str] of
+                  canonical subject names), types (list from VALID_TYPES),
+                  statuses (list from VALID_STATUSES), show_completed (bool),
+                  month ('YYYY-MM'). Any other key is ignored. FR06.
+    sort          optional {'by': one of ALLOWED_SORT_KEYS ('due_date',
+                  'weight', 'subject'), 'direction': 'asc' | 'desc'}. FR07.
+
+    Returns a list of decorated assessment dicts — the _row_to_dict keys plus
+    days_remaining, urgency_band and due_display from _decorate — in the
+    requested order. Reads the `assessments` table only. Raises nothing: a
+    filter it cannot use is dropped rather than reported.
     """
+    # 1. A non-dict for either argument becomes {}, so every .get() below reads
+    #    as "no filter given" instead of raising. Both arrive from the client,
+    #    and a broken view preference is not worth failing a whole screen over.
     filters = filters if isinstance(filters, dict) else {}
     sort = sort if isinstance(sort, dict) else {}
 
+    # 2. Sort key whitelist (FR07). This value is handed to tables.order_by,
+    #    which names a COLUMN, so an unchecked string here would let a caller
+    #    order by any column in the table. Anything unrecognised silently falls
+    #    back to 'due_date', the default order FR07 specifies.
     sort_by = sort.get('by')
     if sort_by not in ALLOWED_SORT_KEYS:
         sort_by = 'due_date'
+    # Tested against 'desc' rather than for 'asc', so a missing or misspelt
+    # direction still sorts soonest-first — the safe way round for a due-date
+    # list, where the top of the screen should be the work that is closest.
     ascending = sort.get('direction', 'asc') != 'desc'
 
+    # 3. The query is accumulated as keyword arguments for ONE search rather
+    #    than as successive filtering passes in Python: Anvil ANDs them together
+    #    server-side, which is both the combining rule FR06 asks for and what
+    #    keeps a 100-assessment dashboard inside its time budget (NFR01).
+    #    Seeding it with `user` is the scope; nothing below ever removes it.
     query = {'user': user}
 
+    # 4. Subjects. safe_list drops anything that is not a non-empty string. The
+    #    `if` matters: an EMPTY list has to mean "no subject filter", because
+    #    q.any_of() with no arguments matches nothing and would hand the student
+    #    a blank dashboard instead of an unfiltered one.
     subjects = safe_list(filters.get('subjects'), element_check=_is_text_value)
     if subjects:
         query['subject'] = q.any_of(*subjects)
 
+    # 5. Types and statuses are additionally intersected with their permitted
+    #    sets, which subjects above is not: the subject catalogue is the whole
+    #    VCE study list and can legitimately grow, whereas these two sets are
+    #    closed. A value that is no longer valid just drops out, so a filter
+    #    saved before a change still narrows by the choices that do exist.
     types = [t for t in safe_list(filters.get('types'), element_check=_is_text_value)
              if t in VALID_TYPES]
     if types:
@@ -813,12 +857,20 @@ def _list_assessments_impl(user, settings_row, filters: dict = None, sort: dict 
                 if s in VALID_STATUSES]
     if statuses:
         query['status'] = q.any_of(*statuses)
+    # elif, not a second if: an explicit status filter WINS over show_completed.
+    # A student who ticked 'completed' in the filter has asked for those rows by
+    # name, and the hide-completed default must not then take them away again.
     elif not safe_bool(filters.get('show_completed'), default=False):
         # Default: hide completed via a positive any_of (avoids not_-query edge
         # cases). Derived from VALID_STATUSES so adding a status cannot leave this
         # line behind.
         query['status'] = q.any_of(*sorted(VALID_STATUSES - {STATUS_COMPLETED}))
 
+    # 6. Month window — what the calendar grid (FR08) asks for when the student
+    #    pages to another month. Both bounds are inclusive so work due on the
+    #    1st or the 31st still falls inside its own month. A month string the
+    #    app cannot read comes back as None and the filter is simply left off:
+    #    an unfiltered list is a better answer than an empty grid.
     month = filters.get('month')
     if month:
         first, last = _get_month_bounds(month)
@@ -827,22 +879,58 @@ def _list_assessments_impl(user, settings_row, filters: dict = None, sort: dict 
 
     rows = app_tables.assessments.search(tables.order_by(sort_by, ascending=ascending), **query)
 
+    # 7. The student's local today, read ONCE for the whole list: every card's
+    #    countdown has to be measured from the same instant, and resolving the
+    #    timezone per row would be 100 conversions for one answer (NFR01).
     today = _user_today(settings_row)
+    # A comprehension rather than a loop, because both steps run for every row
+    # unconditionally and neither can fail: _row_to_dict read-guards the row
+    # into a plain dict (no live Row leaves the server, NFR03) and _decorate
+    # adds the display fields in place before handing the same dict back.
     return [_decorate(_row_to_dict(r), today) for r in rows]
 
 
 def _get_month_bounds(month_str):
-    """'YYYY-MM' -> (first_date, last_date) or (None, None)."""
+    """'YYYY-MM' -> (first_date, last_date) or (None, None).
+
+    The month filter travels as a string, but `assessments.due_date` holds dates,
+    so the calendar's "show me this month" needs a real pair of dates to sit
+    between. Returns a pair rather than raising, because a month the app cannot
+    read is a stale view preference and not a reason to refuse the student their
+    list — _list_assessments_impl tests for None and leaves the filter off.
+
+    month_str  expected to be 'YYYY-MM'; dashboard._sanitise_filters builds it
+               with '%04d-%02d'. Anything else — None, a number, '2026',
+               '2026-13' — comes back as (None, None).
+
+    Returns (datetime.date, datetime.date): the first and the last day of that
+    month, both meant to be used inclusively. Touches no table. Never raises.
+    """
     try:
+        # split then int, both inside the try, so no separate shape test is
+        # needed: a non-string raises AttributeError here, a string with the
+        # wrong number of parts raises ValueError on the unpacking, and
+        # '2026-ab' raises ValueError from int(). All three are caught below.
         year, month = month_str.split('-')
         year, month = int(year), int(month)
+        # datetime.date is doing the range check: month 13, month 0 or year 0
+        # raise ValueError, so an impossible month can never reach the caller
+        # as a usable-looking pair.
         first = datetime.date(year, month, 1)
+        # December has no "first of next month" inside the same year, so its
+        # last day is stated outright. Every other month is found by stepping
+        # back one day from the 1st of the next one, which avoids a
+        # 28/29/30/31 lookup table and gets February in a leap year for free.
         if month == 12:
             last = datetime.date(year, 12, 31)
         else:
             last = datetime.date(year, month + 1, 1) - datetime.timedelta(days=1)
         return first, last
     except (ValueError, TypeError, AttributeError):
+        # One handler for all three, because the answer to every malformed
+        # month is the same: there is no window to filter on. A PAIR of Nones
+        # is returned rather than a bare None so the caller's two-name
+        # unpacking keeps working on the failure path.
         return None, None
 
 
@@ -850,26 +938,100 @@ def _get_month_bounds(month_str):
 
 @anvil.server.callable
 def export_user_data():
-    """Return all of the current user's data as a downloadable JSON blob (FR18)."""
+    """Return all of the current user's data as a downloadable JSON blob (FR18).
+
+    The backup half of the portability pair; import_user_data below reads what
+    this writes. Neither was in the original SAT proposal — both were added after
+    the client asked, in interview question 3, for a way to get his data out "in
+    case the system goes down". So the file has to contain everything he would
+    miss if the app disappeared, and nothing that would not mean anything without
+    it.
+
+    Takes no parameters. The export is always the CALLER'S data, resolved from
+    the session, so there is no id a caller could substitute to read somebody
+    else's (NFR03).
+
+    Returns an anvil.BlobMedia the browser downloads as
+    'dotpoint-export-YYYY-MM-DD.json'. Its JSON content is one object:
+      version      int, always 1 — the number import_user_data checks
+      exported_at  ISO 8601 UTC timestamp of the export itself
+      assessments  list of _row_to_dict dicts: dates as 'YYYY-MM-DD',
+                   created_at/updated_at in full ISO form, each with its 'id'
+      notes        list of _note_row_to_dict dicts, likewise carrying 'id'
+      settings     the seven-key _settings_row_to_dict view
+    Reads `assessments`, `notes` and `user_settings`. Raises AuthenticationFailed
+    if nobody is signed in; nothing else here can fail, because every cell has
+    already been through a read guard.
+    """
+    # 1. Identity first, as in every callable in this module (NFR03).
     user = _require_user()
     settings = _get_or_create_settings(user)
+    # 2. Both searches are scoped on `user`, so the file can only ever hold the
+    #    caller's own rows. Going through the same _row_to_dict /
+    #    _note_row_to_dict guards the screens use is what makes the result
+    #    JSON-serialisable at all: dates come back as strings and no live Row is
+    #    left in the structure. Neither dict reads the `user` column, so the
+    #    file is portable — importing it into a different account is meant to
+    #    work, and an owner recorded in the file could not be trusted anyway.
     assessments = [_row_to_dict(r) for r in app_tables.assessments.search(user=user)]
     notes = [_note_row_to_dict(r) for r in app_tables.notes.search(user=user)]
     payload = {
+        # Stamped from the first release, so a later format change can be
+        # RECOGNISED rather than guessed at from the shape of the file.
         'version': 1,
+        # UTC, and deliberately separate from the filename's local date below:
+        # this records exactly when the file was made, while the filename says
+        # which day it belongs to for a student scanning a downloads folder.
         'exported_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
         'assessments': assessments,   # reminder_logs deliberately excluded (FR18)
         'notes': notes,
         'settings': _settings_row_to_dict(settings),
     }
+    # 3. indent=2 costs some file size and buys a file the student can open and
+    #    read for himself, which is most of the point of a backup he owns. The
+    #    encoding is named rather than left to the platform because BlobMedia
+    #    takes bytes, not text.
     blob = json.dumps(payload, indent=2).encode('utf-8')
+    # 4. The filename carries the student's LOCAL date, not the server's UTC
+    #    one: a file downloaded at 9pm in Melbourne must not be dated tomorrow.
+    #    '%Y-%m-%d' rather than NFR08's 'DD MMM YYYY' is deliberate — this is a
+    #    filename, and year-first is the form that sorts correctly in a folder.
     name = 'dotpoint-export-%s.json' % _user_today(settings).strftime('%Y-%m-%d')
+    # 5. The MIME type is what makes the browser offer a download rather than
+    #    render the JSON in a tab.
     return anvil.BlobMedia('application/json', blob, name=name)
 
 
 def _validate_import_payload(data: dict):
     """Validate a decoded export dict up-front (before any write). Returns
-    (validated_notes, validated_assessments) or raises ValueError."""
+    (validated_notes, validated_assessments) or raises ValueError.
+
+    Split out of import_user_data so that FR19's "validate the file before any
+    write" is structural rather than a matter of remembering to: this function
+    cannot write, and its caller does not validate. One bad row therefore
+    refuses the WHOLE import with nothing written, which is the outcome the
+    student wants — a half-restored backup is worse than a refused one, because
+    there is no way to tell which half arrived.
+
+    data  the already-json.loads'd export file. Untrusted twice over: it comes
+          off the student's own disk, where he may have edited it, and it may
+          have been written by an older version of the app.
+
+    Returns a pair of lists, each in the file's own order:
+      validated_notes        [(old_note_id or None, clean note fields dict)]
+      validated_assessments  [(validated payload dict, old linked_note_ids list)]
+    The old ids ride ALONGSIDE the payloads rather than inside them because they
+    name rows that do not exist yet; import_user_data remaps them once the notes
+    have been inserted and real ids exist.
+
+    Reads nothing and writes nothing. Raises ValueError — naming the file
+    position of the offending row — on any structural or field failure.
+    """
+    # 1. Structure before content. All five conditions share one `if` because
+    #    they share one answer: this is not a DotPoint export, and telling a
+    #    student which of five internal keys is missing would not help him pick
+    #    a better file. version != 1 is refused here rather than treated as an
+    #    upgrade path because there has only ever been one format to read.
     if (not isinstance(data, dict) or data.get('version') != 1
             or not isinstance(data.get('assessments'), list)
             or not isinstance(data.get('notes'), list)
@@ -878,16 +1040,31 @@ def _validate_import_payload(data: dict):
             'That file is not a DotPoint export. Choose the .json file you '
             'downloaded from Export.')
 
+    # 2. Notes are validated first because the assessments link TO them, so the
+    #    id map the caller builds has to exist before the links are remapped.
     validated_notes = []
     for i, n in enumerate(data['notes']):
         try:
+            # The four fields are listed out rather than the whole of `n` being
+            # passed through: writing them by name IS the whitelist, so an 'id',
+            # 'user' or invented key in the file is ignored here and can never
+            # reach add_row. The `or` defaults cover an export written before a
+            # column existed — a note with no tags imports as a note with no
+            # tags instead of failing the whole file. This is the same gate
+            # create_note and update_note use, so an imported note cannot be
+            # something the app would refuse to let him type by hand.
             clean = _validate_note_fields({
                 'title': n.get('title'), 'content': n.get('content') or '',
                 'tags': n.get('tags') or [],
                 'is_pinned': bool(n.get('is_pinned', False)),
             })
         except ValueError as e:
+            # i + 1 because a student counting notes in a file starts at one.
+            # The original message is appended so he learns WHICH field is
+            # wrong, not merely which note.
             raise ValueError('Note %d in that file could not be imported. %s' % (i + 1, e))
+        # The old id is kept even for a note that validated cleanly: it is the
+        # left-hand side of the id map. None when the file carried no 'id'.
         validated_notes.append((n.get('id'), clean))
 
     validated_assessments = []

@@ -35,6 +35,14 @@ to is settled by one question: is there a person present who can fix this?
                than degrading. These NEVER raise — they coerce the value to a
                documented, safe default and carry on.
 
+The PROMISE each family makes to its caller follows from that, and is the reason
+neither result needs checking a second time. A require_* hands back the value to
+write — coerced to the stored type wherever that applies, so text comes back
+stripped, a number as a float and a date as a datetime.date — and the caller can
+pass it straight to add_row/update. A safe_* hands back something fit to put on a
+screen no matter what the cell held, so a caller reading a row needs no try/except
+and no None-handling beyond the default it chose itself.
+
 The two are not interchangeable, and swapping them fails in both directions.
 safe_* on the way IN would quietly store a wrong value the student was standing right
 there to fix. require_* on the way OUT would let one corrupt cell take down a screen —
@@ -51,6 +59,12 @@ Every rule the rubric names is represented:
                  require_timezone, round_percentage
   reasonable/ -> require_not_after, require_within_horizon, require_complete_record
   completeness
+
+round_percentage is the odd name in that list: it never raises, because it is a
+NORMALISER rather than a check — it runs immediately after the range check to fix
+the number of decimal places. It is grouped with the require_* family because it
+belongs to the write path, and putting it there is what stops the stored weight
+and the displayed weight ever disagreeing.
 
 and every column read back out of a table has a degrading twin:
   safe_text, safe_bool, safe_number, safe_choice, safe_list, safe_date,
@@ -214,7 +228,25 @@ def require_int_in_range(value, field_label, minimum, maximum):
 
 
 def require_list(value, field_label, allow_empty=True):
-    """Type check for a list. Anvil simpleObject columns can hold anything at all."""
+    """Type check for a list. Anvil simpleObject columns can hold anything at all.
+
+    Guards the SHAPE only — reminder_days, linked_note_ids, tags, subjects and the
+    bulk-add line list all arrive here first, and each caller then checks its own
+    elements afterwards (require_int_in_range per day, require_text per tag).
+
+    `allow_empty` defaults to True because empty is a real answer for most of
+    them — no reminder days, no linked notes, no tags — and because where empty
+    IS wrong the reason is never simply "the list is short": notes._clean_subjects
+    refuses a subject list with no maths study, and says which four to choose
+    from. So no caller passes False today. The flag stays for a future field
+    whose only rule is non-emptiness, so it can say so in the call rather than
+    writing its own `if not ...` and drifting from this message.
+
+    Returns the SAME list object, not a copy — the opposite of safe_list, and
+    deliberately so. This value came from the caller a moment ago rather than out
+    of a database row, so there is no shared Anvil cell to protect, and every
+    caller goes on to iterate or rebuild it anyway.
+    """
     if not isinstance(value, list):
         raise ValueError('%s must be a list of values.' % field_label)
     if not value and not allow_empty:
@@ -256,15 +288,35 @@ def require_iso_date_text(value, field_label):
 
     Used for `user_settings.school_terms`, whose dates live inside an Anvil
     simpleObject column and so cannot be stored as date objects.
+
+    `value` must be the string itself; `field_label` names the field the way the
+    UI does, and the callers build it per entry ('Term 2 start date') so a list of
+    four terms can say which one is wrong. Returns the STRIPPED string, never a
+    date. Raises ValueError on a non-string and on a string that is not a real
+    calendar day.
     """
+    # Unlike require_date, a real date or datetime object is REJECTED rather than
+    # converted. That looks unhelpful and is the point: the value is about to be
+    # stored inside a simpleObject column, which Anvil serialises as JSON, and JSON
+    # has no date type. Accepting a date here would push the failure down to the
+    # write, where the message could no longer name which term was wrong.
     if not isinstance(value, str):
         raise ValueError('%s must be a date in the form YYYY-MM-DD.' % field_label)
     try:
+        # The parsed date is deliberately thrown away — fromisoformat is used only
+        # as the "is this a day that exists?" test, which catches 2026-02-30 and
+        # 2026-13-01 where a pattern match would not.
         datetime.date.fromisoformat(value.strip())
     except ValueError:
+        # Re-raised with the offending text quoted, because a settings save sends a
+        # whole list of terms at once and "check your dates" would not say which.
         raise ValueError(
             '%s must be a real date in the form YYYY-MM-DD (got "%s").'
             % (field_label, value))
+    # The original string is returned, not the date that was just parsed, so every
+    # stored value is zero-padded ISO text. notes._validate_school_terms relies on
+    # exactly that: it sorts and overlap-checks terms by comparing these strings,
+    # which only gives chronological order while the shape is guaranteed here.
     return value.strip()
 
 
@@ -311,9 +363,27 @@ def round_percentage(value):
     Applied AFTER the range check so the stored value and the displayed value can
     never disagree — 25.333333333333336 becomes 25.33 once, at the point of writing,
     rather than being re-rounded differently by each screen that renders it.
+
+    Takes the float require_number_in_range has already returned (0-100), or None.
+    Returns a float rounded to 2 dp, or None. Never raises — see the module
+    docstring: it is a normaliser on the write path, not a check.
     """
+    # None passes straight through instead of becoming 0.0, because weight is
+    # OPTIONAL and 0% is a real weighting: an assessment that carries no marks is
+    # not the same as one whose percentage was never published, and collapsing the
+    # two would make both read as "0%" on every screen.
+    #
+    # assessments.py never actually sends None — it tests for a missing weight
+    # first and writes None itself. The arm stays because this rule belongs with
+    # the rounding rather than with one caller, and because it is what the next
+    # write path will hit before it remembers to test.
     if value is None:
         return None
+    # float() before round() is not redundant: round(25, 2) returns the INT 25,
+    # so without it a whole-number weight would be stored as an int and a
+    # fractional one as a float. Coercing here keeps every weight in the column
+    # the same type, which is the type require_number and safe_number both
+    # promise, so nothing downstream has to handle both.
     return round(float(value), _WEIGHT_DECIMAL_PLACES)
 
 
@@ -327,7 +397,14 @@ def require_not_after(earlier, later, earlier_label, later_label):
     """Reasonableness: `earlier` must not fall after `later`.
 
     Both may be None (an optional date is not an error); the check only runs when
-    there are two real dates to compare.
+    there are two real dates to compare. The labels are the UI's names for the two
+    fields, and both appear in the message, because "check the dates" is no use
+    when a settings save has eight of them on screen.
+
+    Returns NOTHING — the only require_* that does not, because there is no single
+    value to hand back and neither date is altered. Callers use it purely for the
+    exception: assessments.py compares start_date with due_date, and
+    notes._validate_school_terms compares each term's own two dates.
     """
     if earlier is None or later is None:
         return

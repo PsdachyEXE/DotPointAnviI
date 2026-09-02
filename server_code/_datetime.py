@@ -22,12 +22,14 @@ Defines, in the order they appear:
                             Assessments slice (§10 step 2) alongside
                             _constants.URGENCY_THRESHOLDS, its first consumer.
 
-This module deliberately depends on nothing but the standard library and
-_constants, which is why the two guards it needs — _safe_timezone here and the
-column read inside _user_now — are written out rather than imported from
-_validation.py and notes.py. _validation imports _get_tz and _safe_timezone from
-here, so importing it back would be a circular import; notes.py sits above this
-module in the same layering.
+This module deliberately imports no other DotPoint module except _constants —
+only the standard library, and pytz on the older runtime the fallback below
+covers. That is why the two guards it needs — _safe_timezone here and the column
+read inside _user_now — are written out rather than imported from _validation.py
+and notes.py. _validation imports _get_tz and _safe_timezone from here, so
+importing it back would be a circular import; notes.py is a feature module that
+sits above this one, so importing it would invert the layering even though
+nothing today would actually cycle.
 """
 
 import datetime
@@ -42,11 +44,15 @@ try:
     from zoneinfo import ZoneInfo as _ZoneInfo
 
     def _get_tz(name: str):
+        """Resolve an IANA name to a tzinfo. Raises on a name the tz database
+        does not hold — which is what _safe_timezone below relies on."""
         return _ZoneInfo(name)
 except ImportError:
     import pytz
 
     def _get_tz(name: str):
+        """The pytz spelling of the same thing, for the older server image. Also
+        raises on an unknown name, so callers cannot tell the two apart."""
         return pytz.timezone(name)
 
 # Pending Decision 2 (A): the user's timezone is stored per-user in
@@ -109,7 +115,18 @@ def _user_now(user_settings_row) -> datetime.datetime:
 
 
 def _user_today(user_settings_row) -> datetime.date:
-    """Today's date in the user's local timezone."""
+    """Today's date in the user's local timezone.
+
+    The workhorse of the pair: every days-remaining figure in the app is
+    (due_date - _user_today(settings)).days, so this is the single anchor the
+    urgency bands, the dashboard counts and the reminder dispatcher all measure
+    from. Takes the same possibly-None settings row as _user_now.
+
+    Calling .date() on the timezone-aware datetime yields the LOCAL calendar day,
+    which is the whole reason for going through _user_now — datetime.date.today()
+    on the Anvil server would give the UTC day, and between 11pm and midnight in
+    Melbourne that is tomorrow.
+    """
     return _user_now(user_settings_row).date()
 
 

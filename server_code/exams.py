@@ -503,16 +503,60 @@ def _find_next_exam(exams: list):
 def _get_exam_days_for_month(exams: list, year: int, month: int) -> dict:
     """{str(day): ['Subject — paper', ...]} for the given calendar month.
 
-    Keys are stringified for Anvil serialization, matching the dashboard
-    calendar's day_buckets convention. An empty or missing list gives {}, which is
-    what the calendar draws for a month with no exams in it.
+    This is the step that maps exam DAYS onto a calendar MONTH. The dashboard
+    draws its grid one month at a time, so a student's whole year of papers has
+    to be narrowed to the ones inside the month on screen and then bucketed by
+    day number — deliberately the same shape dashboard._build_calendar produces
+    for assessments, so the client paints both overlays through the one _cell()
+    lookup instead of two different conventions.
+
+    Args:
+        exams: the output of _build_exams_for_subjects. Unlike _find_next_exam
+            this does NOT care whether the list is sorted: every entry is
+            examined, and each day's list simply keeps the order it arrived in.
+            None and [] are both accepted and both give {}.
+        year: four-digit year of the month being drawn.
+        month: month number, 1-12. Neither argument is range-checked here —
+            dashboard._parse_month has already bounded them, and an impossible
+            pair matches no exam and returns {} rather than failing.
+
+    Returns:
+        {'<day of month>': ['Subject — paper', ...]}, e.g. {'5': ['Mathematical
+        Methods — Exam 1', 'Music — Written examination (Composition stream
+        only)']}. {} for a month with no exams in it, which is what the calendar
+        shows for most of the year. Reads no database table.
+
+    Raises:
+        Nothing.
     """
     days = {}
     for e in (exams or []):
+        # 1. Re-parsed through safe_date rather than sliced out of the ISO text.
+        #    Comparing the first seven characters against 'YYYY-MM' would work
+        #    for rows this module built, but going back through the guard keeps
+        #    the helper correct for a dict some future caller assembled by hand.
         d = safe_date(e.get('date'))
         if d is None:
+            # Same rule as everywhere else in this module: an unreadable row
+            # costs itself one calendar marker, never the whole overlay.
             continue
+        # 2. BOTH halves of the date are tested. Matching on the month alone
+        #    would drop next year's November papers onto this November's grid.
         if d.year == year and d.month == month:
+            # 3. setdefault, not `days[key] = [...]`, because a day holds a LIST:
+            #    5 Nov 2026 carries Methods Exam 1 and the Music Composition
+            #    paper at the same hour, so a student taking both has two labels
+            #    on one square.
+            #
+            #    The key is str(d.day) because Anvil refuses to serialize a dict
+            #    whose keys are not strings ("Cannot serialize dictionaries with
+            #    keys that aren't strings"), and the client's _cell() helper
+            #    looks the string form up.
+            #
+            #    The label is joined HERE rather than on the client so the
+            #    calendar tooltip and the day dialog cannot word it differently,
+            #    and both halves go out through safe_text because every one of
+            #    these strings was typed by hand into the table above.
             days.setdefault(str(d.day), []).append(
                 '%s — %s' % (safe_text(e.get('subject')), safe_text(e.get('paper'))))
     return days
@@ -522,20 +566,106 @@ def _get_exam_days_for_month(exams: list, year: int, month: int) -> dict:
 
 @anvil.server.callable
 def get_exam_timetable() -> dict:
-    """The logged-in student's VCE 2026 written exams, sorted by date."""
+    """The logged-in student's VCE 2026 written exams, sorted by date.
+
+    THE SCREEN THIS DRAWS. client_code/ExamsForm, in one round trip: a countdown
+    chip for the next paper, the full list soonest-first with an FR21 colour band
+    on each row, and two honesty panels naming the subjects with no paper and the
+    subjects this app has no data for. ExamsForm makes no other server call, so
+    the dict below is the whole of what that screen knows — the same one-call
+    shape the dashboard uses, for the same NFR01 reason.
+
+    WHERE IT SITS IN THE REQUIREMENTS. The exams screen is spec §13, added after
+    the SRS was signed off, so it has no FR number of its own. What it borrows is
+    the rest of the app's behaviour: the countdown is the (date - today).days
+    FR09 fixes for assessments, the bands come from FR21's first-match-wins table
+    via _urgency_band, and NFR03 holds without an explicit ownership test because
+    _require_user() runs first and the only per-user thing read is the caller's
+    own settings row.
+
+    Takes no arguments, deliberately. There is nothing here to filter, sort or
+    page: the timetable is one short list and it is the same list every time. An
+    argument the client could send would only be one more value to guard.
+
+    Returns:
+        A plain dict of seven keys:
+            today             'YYYY-MM-DD' — the STUDENT's today, so the page can
+                              show what the countdowns were measured from.
+            onboarded         bool. False means no subjects are locked in, and
+                              ExamsForm offers "Choose my subjects" instead of a
+                              timetable.
+            exams             [{'subject', 'paper', 'date', 'start', 'end',
+                              'days_remaining', 'urgency_band'}, ...], soonest
+                              first — see _build_exams_for_subjects for what each
+                              field holds. [] when the student has not onboarded,
+                              or when every subject they take is in
+                              NO_WRITTEN_EXAM.
+            next_exam         the first unfinished entry OUT OF 'exams' — the
+                              same dict object, sent twice, so the chip and the
+                              row can never describe the paper differently — or
+                              None once every paper is done.
+            no_exam_subjects  [str] their subjects that genuinely have no written
+                              paper. Reads as "nothing to sit".
+            not_covered       [str] their subjects this file has no data for.
+                              Reads as "check VCAA yourself". Kept as a separate
+                              key from the one above precisely so a gap in the
+                              transcription can never be shown as reassurance.
+            source_url        the VCAA page the timetable came from, so the page
+                              can link to the authority rather than claim to be
+                              one.
+
+        Reads `user_settings` only, through _get_or_create_settings — the
+        timezone and the locked subject list. Writes nothing, except that
+        _get_or_create_settings inserts a defaults row on a student's very first
+        call; that is the only write anywhere on this path.
+
+    Raises:
+        anvil.users.AuthenticationFailed, from _require_user, when nobody is
+        signed in. Nothing after that line raises: every helper below degrades.
+    """
+    # 1. Identity first, before an argument, a table or a helper is touched
+    #    (_auth.py's rule 1). Nothing here is scoped by hand afterwards because
+    #    `settings` is the only user-owned row this function reads.
     user = _require_user()
     settings = _get_or_create_settings(user)
+    # 2. Both the clock and the date are taken, in the STUDENT's timezone rather
+    #    than the server's UTC. `now` is kept as well as `today` because it is
+    #    the only thing that can tell _build_exams_for_subjects that this
+    #    morning's paper has already finished — a date on its own would leave it
+    #    reading "today" until midnight.
     now = _user_now(settings)
     today = now.date()
 
+    # 3. Three pure steps in order: which subjects, then which papers, then which
+    #    paper is next. Split this way for two reasons — each step can be
+    #    exercised in tests with no Anvil session, and dashboard.py imports these
+    #    same three helpers, so the calendar's exam overlay is computed by the
+    #    identical code and cannot disagree with this page.
     subjects = _get_exam_subjects(settings)
     exams = _build_exams_for_subjects(subjects, today, now)
+    # 4. The subjects that produced no paper at all. Worked out ONCE and then
+    #    split two ways in the dict below, because the difference between those
+    #    two answers is the entire reason NO_WRITTEN_EXAM exists: "you have no
+    #    exam for this" and "DotPoint has no data for this" must never reach the
+    #    student as the same sentence.
+    #
+    #    The test is membership of EXAM_TIMETABLE_2026, not "did this subject
+    #    contribute a row to `exams`". They differ for a subject whose only
+    #    timetable row failed safe_date, and membership is the answer that keeps
+    #    that subject reported as covered instead of mislabelled a gap in the
+    #    data — the transcription is present, it is just unreadable, and the
+    #    skipped-row comment in _build_exams_for_subjects owns that case.
     uncovered = [s for s in subjects if s not in EXAM_TIMETABLE_2026]
     return {
         'today': today.isoformat(),
+        # bool(), not the list itself: the client only asks yes/no here, and it
+        # already receives the subjects it needs inside 'exams'.
         'onboarded': bool(subjects),
         'exams': exams,
         'next_exam': _find_next_exam(exams),
+        # The two comprehensions partition `uncovered` between them, so every
+        # subject with no paper lands in exactly one of these lists and none can
+        # fall out of the payload unmentioned.
         'no_exam_subjects': [s for s in uncovered if s in NO_WRITTEN_EXAM],
         'not_covered': [s for s in uncovered if s not in NO_WRITTEN_EXAM],
         'source_url': EXAM_SOURCE_URL,

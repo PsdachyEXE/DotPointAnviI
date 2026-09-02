@@ -77,10 +77,39 @@ def _parse_month(month, today):
     Degrades rather than raises: this value comes from the calendar's prev/next
     arrows, not from a person typing, so there is no input for anyone to correct and
     showing the current month is the only useful answer.
+
+    Args:
+        month: what the client sent. Expected 'YYYY-MM' (the form the payload
+            hands back, so the arrows return exactly what they were given), but
+            anything at all may arrive — None on a first load, a list, a number,
+            '99999-05' from a hand-written call.
+        today: the student's local date, from _user_today. Supplies the fallback
+            year/month, and is a parameter rather than a datetime.date.today()
+            call inside so the whole payload is built against ONE notion of
+            today.
+
+    Returns:
+        (year, month) as ints, year within 2000-2100 and month within 1-12 —
+        the ranges _MIN_CALENDAR_YEAR/_MAX_CALENDAR_YEAR and 1-12 enforce, which
+        is what makes the result safe to hand straight to
+        calendar.monthcalendar(). Touches no database table.
+
+    Raises:
+        Nothing. That is the contract every caller here relies on.
     """
+    # 1. Shape test before any splitting. count('-') == 1 rejects both '2026'
+    #    and '2026-05-01' up front, which is what lets the unpacking on the next
+    #    line be a plain two-name assignment instead of a length check.
+    #    A negative year like '-2026-05' also has two dashes and is refused here.
     if isinstance(month, str) and month.count('-') == 1:
         year_text, month_text = month.split('-')
         try:
+            # 2. int() first, then the range check, because require_int_in_range
+            #    is a RANGE test and would reject a string on type alone with a
+            #    message about whole numbers. .strip() forgives ' 2026-05 '.
+            #    The upper bound is what stops calendar.monthcalendar() being
+            #    handed a year datetime cannot build — that is the crash '99999-05'
+            #    used to cause, and the reason this parser is shared.
             year = require_int_in_range(
                 int(year_text.strip()), 'Calendar year',
                 _MIN_CALENDAR_YEAR, _MAX_CALENDAR_YEAR)
@@ -89,46 +118,108 @@ def _parse_month(month, today):
             return year, mon
         except ValueError:
             # int() on non-digits, or a year/month outside the supported window.
+            # One except covers both because the answer is the same, and it is
+            # ValueError specifically: require_int_in_range raises exactly that,
+            # and so does int() on 'abc', so nothing unexpected is swallowed.
             pass
+    # 3. The single fallback both failure paths fall through to — a bad shape
+    #    above, or a bad number inside the try. Returning today's month rather
+    #    than raising is what keeps a stale bookmark or a mistyped call showing a
+    #    dashboard instead of an error page.
     return today.year, today.month
 
 
 def _safe_filters(filters, today):
     """Guard the filter dict before any part of it reaches a database query.
 
-    Unknown keys are dropped silently against ALLOWED_FILTER_KEYS (NFR04). Each
-    list filter must actually be a list (require_list — a person is driving these
-    dropdowns and can be told), and members the app could never have stored are
-    dropped; if that empties a filter the key goes too, so the query is left
-    unrestricted on that column rather than being handed an empty any_of().
+    These are FR06's filters (status, subject, type, plus the show-completed
+    toggle and the month the calendar is showing), and they arrive from the
+    browser, so nothing in the dict is trusted. A WHITELIST is used rather than a
+    blacklist for the reason whitelists always are: this module has to know every
+    key it will honour, and it cannot know every key an attacker might invent.
+
+    Each list filter must actually be a list (require_list, which RAISES — unlike
+    almost every other guard in this file, a person is driving these dropdowns
+    and can be told), and members the app could never have stored are dropped; if
+    that empties a filter the key goes too, so the query is left unrestricted on
+    that column rather than being handed an empty any_of().
+
+    Args:
+        filters: whatever the client sent. None and {} both mean "no filters".
+            Recognised keys are ALLOWED_FILTER_KEYS: 'subjects', 'types',
+            'statuses' (lists), 'show_completed' (bool), 'month' ('YYYY-MM'),
+            and 'sort_by', which is whitelisted but read by nothing — sorting
+            travels in the separate `sort` argument, so a 'sort_by' entry is
+            carried through and then ignored by _list_assessments_impl.
+        today: the student's local date, only ever passed on to _parse_month for
+            the month fallback.
+
+    Returns:
+        A NEW dict safe to hand to _list_assessments_impl. 'show_completed' is
+        always present (bool); every other key is present only when it survived
+        cleaning, which is what "no restriction on this column" looks like to the
+        query builder. Reads no database table itself.
+
+    Raises:
+        ValueError — `filters` is not a dict, or a list filter is not a list.
+        Both are messages a student can act on, which is why these two raise
+        where the value checks around them degrade.
     """
+    # `filters or {}` folds None and {} together first; the isinstance test then
+    # catches a non-dict. Both lines are needed — `or` alone would let a string
+    # through, and isinstance alone would reject None.
     filters = filters or {}
     if not isinstance(filters, dict):
         raise ValueError('The dashboard filters were not sent correctly. '
                          'Reload the page and try again.')
 
+    # 1. The whitelist, applied first so nothing unrecognised is even looked at
+    #    below. Rebuilt as a NEW dict rather than popping from the caller's,
+    #    because this function must not mutate an argument the caller still
+    #    holds. `clean` from here on is the only version anything downstream sees.
     clean = dict((k, v) for k, v in filters.items() if k in ALLOWED_FILTER_KEYS)
 
+    # 2. The three list filters, driven by a table rather than three near-copies
+    #    of the same block: the only thing that differs between them is the
+    #    message label and the set of values the app could have stored.
     for key, label, allowed in (
         ('subjects', 'Subject filter', _FILTERABLE_SUBJECTS),
         ('types', 'Type filter', VALID_TYPES),
         ('statuses', 'Status filter', VALID_STATUSES),
     ):
+        # An absent key and an explicit None mean the same thing — "don't filter
+        # on this" — so both are folded onto the same removal. Removing rather
+        # than leaving None is what the query builder reads as "unrestricted".
         if clean.get(key) is None:
             clean.pop(key, None)
             continue
+        # require_list RAISES on a non-list (the student can be told), but a
+        # MEMBER the app could never have written is merely dropped: a subject
+        # name outside _FILTERABLE_SUBJECTS cannot match any row, so sending it
+        # to the query would only widen an any_of() for nothing.
         wanted = [v for v in require_list(clean[key], label) if v in allowed]
         if wanted:
             clean[key] = wanted
         else:
+            # Every member was junk. The key is DROPPED rather than left as [],
+            # because an empty any_of() is not "no restriction" — it is a query
+            # nothing can satisfy, and the student would see an empty dashboard
+            # with no explanation for it.
             clean.pop(key)
 
-    # A missing checkbox means "off", and a non-bool means the client sent something
-    # this module has no opinion about; both give the documented default.
+    # 3. A missing checkbox means "off", and a non-bool means the client sent
+    #    something this module has no opinion about; both give the documented
+    #    default. Always written, never dropped, because unlike the lists above
+    #    "absent" would leave _list_assessments_impl to invent its own default.
     clean['show_completed'] = safe_bool(clean.get('show_completed'), default=False)
 
-    # Same parser as the calendar, so a month string can never restrict the list to
-    # one range while the grid shows another.
+    # 4. Same parser as the calendar, so a month string can never restrict the
+    #    list to one range while the grid shows another. The value is REBUILT
+    #    from the parsed numbers rather than passed along as it arrived, because
+    #    _parse_month may have substituted today's month for an unusable one —
+    #    passing the original through would leave the list querying a month the
+    #    grid is not drawing. '%04d-%02d' puts it back in the canonical
+    #    zero-padded form assessments._get_month_bounds is written against.
     if clean.get('month') is None:
         clean.pop('month', None)
     else:
@@ -157,12 +248,34 @@ def _days_remaining(due_date, today):
     as "no countdown": the card prints the date on its own, the calendar cell falls
     back to the 'distant' band, and the sidebar skips the row. The stored date is
     still displayed — the implausible number is suppressed, not the record.
+
+    Args:
+        due_date: a datetime.date already through safe_date, or None for a row
+            with no usable due date.
+        today: the student's local date from _user_today — never the server's
+            UTC date, or the countdown would be a day out for most of a
+            Melbourne evening.
+
+    Returns:
+        int (FR09's (due_date - today).days: negative overdue, 0 today), or None
+        when there is no trustworthy number to report. Reads nothing.
+
+    Raises:
+        Nothing — the one ValueError it can provoke is caught below.
     """
     if due_date is None:
         return None
+    # try/except rather than an if, because the horizon rule lives in ONE place:
+    # require_within_horizon is the same function the write path calls, so the
+    # date a new assessment is refused for is exactly the date whose countdown is
+    # suppressed here. Re-implementing the five-year test as a comparison would
+    # be a second copy of the rule, free to drift.
     try:
         require_within_horizon(due_date, today, 'Due date')
     except ValueError:
+        # The exception is used as a signal, not an error: on a READ path there
+        # is nobody present to correct the cell, so the message is discarded and
+        # the neutral answer returned instead.
         return None
     return (due_date - today).days
 

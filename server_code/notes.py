@@ -774,7 +774,32 @@ def _validate_school_terms(terms) -> list:
     return clean
 
 
-# --- note CRUD + search (spec section 2, step 6) ---------------------------
+# ===========================================================================
+# SURFACE 3 of 4 — NOTE CRUD + SEARCH   (spec §10 step 6; table: notes, §1)
+# ===========================================================================
+# FR10 is create / edit / delete / pin; FR11 is the free-text search plus the
+# tag filter, combined with AND. Everything from here to the AUTHENTICATION
+# banner serves the Notes screen (NotesForm draws the list, NoteEditorForm the
+# dialog) and the linked-note picker inside AssessmentEditorForm, which reuses
+# search_notes rather than growing a second query of its own.
+#
+# THREE RULES HOLD ACROSS THE WHOLE SURFACE:
+#   * every callable opens with _require_user(), and every by-id path calls
+#     _own_or_raise() on the row it just fetched — get_by_id() reaches straight
+#     into the table and does NOT apply the user= scoping a search would have
+#     (NFR03);
+#   * a note the client names but which is no longer there RAISES ValueError
+#     rather than returning a quiet False, so edit, delete and pin all fail the
+#     same way and NotesForm has one message to write;
+#   * nothing but a plain dict from _note_row_to_dict crosses back to the
+#     client — a live Row would hand the browser write access to the table.
+#
+# The four note columns are read WITHOUT _row_value, unlike every settings
+# read above. That is deliberate: §1 lists the notes table with "Migration:
+# None", so its columns have existed since the table did and the
+# NoSuchColumnError case _row_value defends against cannot arise here. The
+# safe_* guards are still applied, because a cell's CONTENTS can still be
+# wrong (an import, or a console edit).
 
 def _is_tag_text(value) -> bool:
     """Element predicate for safe_list: a tag the app can search and display.
@@ -790,19 +815,69 @@ def _is_tag_text(value) -> bool:
 def _note_row_to_dict(row) -> dict:
     """Plain-dict view of a note row; timestamps as ISO strings, incl. 'id'.
 
-    Read guards throughout, for the same reason as _settings_row_to_dict: one
-    corrupt cell must cost the student one field, not the whole Notes screen.
+    The read-guard boundary for the notes table, and the twin of
+    _settings_row_to_dict: every cell is routed through a `safe_*` guard so one
+    corrupt value costs the student one FIELD, not the whole Notes screen.
+    Nothing in here raises.
+
+    `row` is a notes Row the caller has already proved the user owns
+    (_own_or_raise), because this function does not look at the `user` column
+    at all — it is a formatter, not a gate.
+
+    Returns exactly seven keys. What a damaged cell degrades to, and why that
+    is the right answer in each case:
+
+        id          str         row.get_id()          -> never degrades; it is
+                                                         the handle every later
+                                                         update/delete/pin call
+                                                         comes back with
+        title       str         non-text cell         -> '' (the note still
+                                                         lists, with a blank
+                                                         title the student can
+                                                         see is wrong and fix)
+        content     str         non-text cell         -> '' (an empty body is
+                                                         already legitimate, so
+                                                         the screen renders)
+        tags        list[str]   bad ELEMENTS dropped  -> [] (an unusable tag is
+                                                         dropped one at a time;
+                                                         see _is_tag_text)
+        is_pinned   bool        non-bool cell         -> False (unpinned: the
+                                                         note stays in the list
+                                                         instead of being
+                                                         claimed as pinned at
+                                                         the top of it)
+        created_at  str | None  non-datetime cell     -> None
+        updated_at  str | None  non-datetime cell     -> None
+
+    The two timestamps become ISO strings rather than staying datetimes: they
+    cross the wire to NotesForm, which formats them for display, and NFR08
+    fixes that display format as 'DD MMM YYYY' — a string is the shape that
+    survives the trip unambiguously.
     """
     def iso(stored):
         # A guard, not a formatter: .isoformat() on a cell that holds a string
         # raises AttributeError, and this runs once per note in the list.
+        #
+        # datetime is named FIRST inside the isinstance tuple only for
+        # readability — a tuple test is an OR, so unlike safe_date (where the
+        # two are separate branches and datetime subclassing date really does
+        # decide the answer) the order here changes nothing.
         if isinstance(stored, (datetime.datetime, datetime.date)):
             return stored.isoformat()
+        # None, not '' — the client tests this key for presence to decide
+        # whether to show a "last edited" line at all, and an empty string
+        # would render as a blank one instead of being skipped.
         return None
     return {
+        # get_id(), not a stored column: Anvil's own row handle. It is what
+        # every later update_note / delete_note / toggle_pin call names, and
+        # what an assessment's linked_note_ids holds (FR12).
         'id': row.get_id(),
         'title': safe_text(row['title']),
         'content': safe_text(row['content']),
+        # Filtered per ELEMENT, so one unusable tag costs one tag rather than
+        # the whole list — and search_notes lowercases what it compares, so a
+        # non-string surviving here would raise there instead.
         'tags': safe_list(row['tags'], _is_tag_text),
         'is_pinned': safe_bool(row['is_pinned'], default=False),
         'created_at': iso(row['created_at']),
@@ -815,8 +890,31 @@ def _validate_note_fields(fields: dict) -> dict:
 
     A patch, so each field is checked only when present — update_note sends just
     the fields the student edited, while create_note and the importer send all four.
+
+    `fields` is a dict whose keys are drawn from EDITABLE_FIELDS_NOTE
+    ('title', 'content', 'tags', 'is_pinned'); update_note has already filtered
+    it to that whitelist, so nothing here has to police unknown keys. Permitted
+    values per key:
+
+        title      str, 1-MAX_TITLE_LENGTH (200) chars after stripping
+        content    str, 0-MAX_NOTE_CONTENT_LENGTH (20000); blank is allowed
+        tags       list of str, each 1-MAX_TAG_LENGTH (40) after stripping,
+                   at most MAX_TAGS_PER_NOTE (20) once de-duplicated; None is
+                   accepted and means "clear them all"
+        is_pinned  bool, and only a real bool
+
+    Returns a NEW dict carrying the same keys with cleaned values, ready for
+    row.update(**...). Raises ValueError, with a sentence written for the
+    student rather than a validation code, on the first field that fails.
     """
+    # Copy rather than mutate: the caller still holds `fields`, and building a
+    # separate dict is what lets create_note and update_note write all-or-
+    # nothing — a failure on 'tags' leaves 'title' unwritten as well.
     out = dict(fields)
+
+    # Each branch tests `in out`, never `out.get(...)`: presence of the key is
+    # what says "the student changed this", and False / '' / [] are all real
+    # new values a student can legitimately have chosen.
 
     if 'title' in out:
         out['title'] = require_text(out['title'], 'Title', MAX_TITLE_LENGTH)
@@ -832,8 +930,19 @@ def _validate_note_fields(fields: dict) -> dict:
             tags = []  # clearing every tag arrives as None from the editor
         require_list(tags, 'Tags')
         # De-duplicate case-insensitively, preserving order, dropping blanks.
+        # `seen` holds the LOWERCASED spellings and exists only for the
+        # membership test; `deduped` holds the spellings actually stored. Two
+        # containers because §1 specifies the tags column as "case-preserved,
+        # comparisons case-insensitive": search_notes lowercases both sides of
+        # its tag filter, so 'Maths' and 'maths' are one tag to FR11 and
+        # keeping both would give the student two chips that behave alike —
+        # but the capitals they typed are theirs to keep, so the FIRST
+        # spelling wins and is the one written.
         seen, deduped = set(), []
         for t in tags:
+            # allow_blank here, then dropped by the `if key` below: a blank tag
+            # is the trailing empty box the editor's tag row leaves behind, not
+            # a mistake worth stopping a save for.
             key = require_text(t, 'Tag', MAX_TAG_LENGTH, allow_blank=True)
             if key and key.lower() not in seen:
                 seen.add(key.lower())
@@ -854,16 +963,48 @@ def _validate_note_fields(fields: dict) -> dict:
 
 @anvil.server.callable
 def create_note(record: dict) -> str:
-    """Create a note owned by the current user; return its row id (FR10)."""
+    """Create a note owned by the current user; return its row id (FR10).
+
+    `record` is the four-field dict NoteEditorForm builds in 'create' mode:
+    'title' (required text), 'content' (markdown, may be blank), 'tags' (list
+    of strings) and 'is_pinned' (bool). Any other key it might carry is
+    ignored — the four are picked out by name below rather than passed through.
+
+    Returns the new row's id as a string, which is what the editor hands back
+    to NotesForm so the freshly saved note can be selected in the reloaded
+    list. The whole note is NOT returned: the caller reloads through
+    search_notes anyway, so sending the record twice would be wasted payload.
+
+    Writes one row to `notes`: title, content, tags, is_pinned, user,
+    created_at, updated_at. Raises AuthenticationFailed when signed out and
+    ValueError, with a student-facing message, on any failed validation.
+    """
     user = _require_user()
+    # `record or {}` covers a client that sends None for an empty form; the
+    # .get() calls below then all answer None instead of raising AttributeError.
     record = record or {}
+    # Every field is named explicitly rather than the dict being passed
+    # through, so a hand-made call cannot smuggle in a column the student is
+    # not allowed to set — 'user' and 'created_at' above all, which decide
+    # ownership (NFR03) and would let a forged record claim someone else's.
+    #
+    # The `or` defaults make create_note total where update_note is a patch:
+    # every column of a new row has to be given a value, and blank content, no
+    # tags and unpinned are the right ones for a note the student just opened.
     clean = _validate_note_fields({
         'title': record.get('title'),
         'content': record.get('content') or '',
         'tags': record.get('tags') or [],
         'is_pinned': bool(record.get('is_pinned', False)),
     })
+    # One `now` for both timestamps, read once: created_at and updated_at have
+    # to be EQUAL on a brand new note, because NotesForm shows "edited" only
+    # when the two differ. Two separate calls could land microseconds apart and
+    # make a note look edited the moment it was created.
     now = datetime.datetime.now(datetime.timezone.utc)
+    # UTC, not the student's timezone: the column is compared and sorted
+    # across rows (search_notes orders on it), so it has to be one clock. The
+    # conversion to Melbourne time happens at display, not at storage.
     row = app_tables.notes.add_row(
         title=clean['title'], content=clean['content'], tags=clean['tags'],
         is_pinned=clean['is_pinned'], user=user, created_at=now, updated_at=now)
@@ -872,18 +1013,55 @@ def create_note(record: dict) -> str:
 
 @anvil.server.callable
 def update_note(row_id: str, fields: dict) -> dict:
-    """Whitelist-filter, validate and apply an edit to an owned note (FR10)."""
+    """Whitelist-filter, validate and apply an edit to an owned note (FR10).
+
+    `row_id` is a notes row id as returned by create_note or carried in a
+    _note_row_to_dict — a string, and one that comes from the CLIENT, so it is
+    never trusted to be the caller's own. `fields` is a PATCH: only the keys
+    the student actually changed, drawn from EDITABLE_FIELDS_NOTE ('title',
+    'content', 'tags', 'is_pinned'). An absent key leaves the stored value
+    alone; anything outside the whitelist is dropped in silence, because a
+    @anvil.server.callable is reachable by anything holding a session cookie
+    and the client's key set is simply not trusted (FR04's whitelist rule,
+    applied to notes).
+
+    Returns the SAVED note as a dict (the seven keys of _note_row_to_dict), so
+    NoteEditorForm redraws from what the database actually holds rather than
+    from what it hoped it sent. Writes to `notes`: whichever of the four
+    editable columns were patched, plus updated_at. Raises
+    AuthenticationFailed when signed out, ValueError when the note is gone or
+    a field fails validation, and PermissionError when the note is somebody
+    else's.
+    """
     user = _require_user()
     row = app_tables.notes.get_by_id(row_id)
+    # Missing is reported BEFORE ownership is tested, and both answers are
+    # deliberately different sentences: a note the student deleted in another
+    # tab is an ordinary race, whereas _own_or_raise's flat "Not your record"
+    # is the security answer and says nothing about whether the row exists.
     if row is None:
         raise ValueError(
             "That note no longer exists — it may have already been deleted.")
+    # get_by_id() does NOT scope by user the way search(user=user) would, so
+    # this is the only thing standing between a stale or guessed id and
+    # somebody else's note (NFR03).
     _own_or_raise(row, user)
+    # Filter first, validate second: validating an unknown key would waste the
+    # student's error message on a field they cannot see, and the whitelist is
+    # what keeps 'user' and 'created_at' unwritable from the client.
     clean = _validate_note_fields(
         {k: v for k, v in (fields or {}).items() if k in EDITABLE_FIELDS_NOTE})
     if clean:
+        # updated_at is stamped HERE rather than accepted from the client, so
+        # the ordering search_notes sorts on cannot be forged, and it is added
+        # only when something really changed — an empty patch is a legitimate
+        # no-op (the editor saves on close whether or not a key was pressed)
+        # and must not push an untouched note to the top of the list.
         clean['updated_at'] = datetime.datetime.now(datetime.timezone.utc)
         row.update(**clean)
+    # Re-read through the guard rather than returning `clean`: the response has
+    # to carry all seven keys including the ones this patch did not touch, and
+    # it must be the guarded view of the row, not the raw values just written.
     return _note_row_to_dict(row)
 
 
@@ -891,9 +1069,18 @@ def update_note(row_id: str, fields: dict) -> dict:
 def delete_note(row_id: str) -> bool:
     """Delete an owned note, first unlinking it from any of the user's assessments.
 
-    Returns True on success; a missing note RAISES rather than returning False, so
-    that a delete and a pin of a note someone else already removed fail the same
-    way (toggle_pin raised while this returned a quiet False for the same cause).
+    `row_id` is the client-supplied notes row id (a string). Returns True on
+    success; a missing note RAISES rather than returning False, so that a
+    delete and a pin of a note someone else already removed fail the same way
+    (toggle_pin raised while this returned a quiet False for the same cause).
+    This is a deliberate departure from spec §2, which specifies `return False`
+    for the missing case.
+
+    Touches TWO tables: it deletes the `notes` row, and it rewrites
+    `assessments.linked_note_ids` on every one of the user's assessments that
+    referenced it — the write half of FR12. Raises AuthenticationFailed when
+    signed out, ValueError when the note is already gone, and PermissionError
+    when it belongs to someone else.
     """
     user = _require_user()
     row = app_tables.notes.get_by_id(row_id)
@@ -901,18 +1088,56 @@ def delete_note(row_id: str) -> bool:
         raise ValueError(
             "That note no longer exists — it may have already been deleted.")
     _own_or_raise(row, user)
+    # WHY A TRANSACTION. linked_note_ids is a simpleObject list of note ids
+    # (FR12), not a database foreign key, so nothing at the platform level
+    # cleans up a reference when its note disappears. The unlink and the delete
+    # therefore have to succeed or fail together: if the delete landed and the
+    # unlink did not, every affected assessment would keep pointing at an id
+    # that no longer resolves, and the editor's linked-note panel would show a
+    # phantom entry the student could never remove.
     with tables.Transaction():
+        # Scoped by user=, so the loop can only ever touch this student's
+        # assessments — it is also what bounds the cost, since NFR01 sizes the
+        # dataset at up to 100 assessments per user.
+        #
+        # A full scan rather than a query on linked_note_ids: Anvil cannot
+        # index inside a simpleObject column, so "which rows mention this id?"
+        # has no server-side query to ask.
         for a in app_tables.assessments.search(user=user):
+            # safe_list because the column is simpleObject and may hold
+            # anything at all; `in` on a bare string would otherwise match on a
+            # SUBSTRING of it and unlink the wrong thing.
             linked = safe_list(a['linked_note_ids'])
+            # Guarded so only the assessments that actually referenced this
+            # note are written. Rewriting all of them would be a needless write
+            # per assessment inside a transaction that is holding the table.
             if row_id in linked:
+                # Rebuilt by comprehension rather than list.remove(): the copy
+                # is a new list, so the row's own cached cell is never mutated
+                # in place, and it also drops a duplicated id in one pass where
+                # .remove() would strip only the first.
                 a.update(linked_note_ids=[n for n in linked if n != row_id])
+        # Deleted LAST, so if a linked_note_ids write raises, the transaction
+        # rolls back with the note still there and the student can retry.
         row.delete()
     return True
 
 
 @anvil.server.callable
 def toggle_pin(row_id: str) -> bool:
-    """Flip a note's pinned state; return the new value (FR10)."""
+    """Flip a note's pinned state; return the new value (FR10).
+
+    A toggle rather than a setter: the client sends only the id and is told
+    what the state became, so two tabs cannot fight over a stale value they
+    each believed was current. FR10 requires pinned notes to sort to the top,
+    which search_notes does on this column.
+
+    `row_id` is the client-supplied notes row id (a string). Returns the NEW
+    is_pinned value, True or False, which NotesForm uses to redraw the one pin
+    icon without reloading the list. Writes `notes`: is_pinned and updated_at.
+    Raises AuthenticationFailed when signed out, ValueError when the note is
+    gone, and PermissionError when it is somebody else's.
+    """
     user = _require_user()
     row = app_tables.notes.get_by_id(row_id)
     if row is None:
@@ -930,15 +1155,48 @@ def toggle_pin(row_id: str) -> bool:
 
 @anvil.server.callable
 def search_notes(query: str = None, tag: str = None, pinned_only: bool = False) -> list:
-    """Return the user's notes (pinned-first, then recent) filtered by query/tag (FR11)."""
+    """Return the user's notes (pinned-first, then recent) filtered by query/tag (FR11).
+
+    The one read path for notes anywhere in the app: NotesForm fills its whole
+    screen from a single call, NoteEditorForm uses it to load one note (there
+    is no single-note getter), and AssessmentEditorForm's linked-note picker
+    reuses it rather than growing a second query (FR12).
+
+    All three parameters are OPTIONAL filters, combined with AND per FR11:
+
+        query       str or None — case-insensitive SUBSTRING match against
+                    title + ' ' + content. None or blank means "no filter".
+                    Bounded to MAX_TITLE_LENGTH (200) characters.
+        tag         str or None — case-insensitive EXACT match against one
+                    entry of the tags list (not a substring, so 'chem' does not
+                    match 'chemistry'). Bounded to MAX_TAG_LENGTH (40).
+        pinned_only bool — keep only pinned notes. Any truthy value works.
+
+    Returns a list of _note_row_to_dict dicts, ordered pinned-first and then
+    most-recently-updated-first (FR10's "pinned notes always sort to the top").
+    An empty list is a normal answer, not an error: the client draws its own
+    "no notes match" message. Reads `notes` only — no writes. Raises
+    AuthenticationFailed when signed out and ValueError if a filter argument is
+    the wrong type or too long.
+    """
     user = _require_user()
     # `query` and `tag` arrive from the search box, so they get the require_* family:
     # allow_blank because an empty box means "no filter", not an error.
+    # Both are lowercased ONCE here rather than inside the comprehensions
+    # below, which would redo the same work per row.
     needle = require_text(
         query, 'Search', MAX_TITLE_LENGTH, allow_blank=True).lower()
     want = require_text(tag, 'Tag', MAX_TAG_LENGTH, allow_blank=True).lower()
+    # bool(), not require_bool: this is a display flag that is never stored, so
+    # a truthy value from a checkbox is a perfectly clear intention. require_bool
+    # is reserved for values that reach a column, where a loose type would
+    # outlive the request.
     pinned_only = bool(pinned_only)
 
+    # user=user is the NFR03 scoping — the query itself can only return this
+    # student's notes, so nothing below needs a second ownership test.
+    # list() materialises it because Anvil hands back a lazy search iterator and
+    # .sort() needs a real list to sort in place.
     rows = list(app_tables.notes.search(user=user))
 
     def _sort_key(r):
@@ -947,33 +1205,103 @@ def search_notes(query: str = None, tag: str = None, pinned_only: bool = False) 
         # take the whole Notes screen down instead of mis-sorting one row.
         updated = r['updated_at']
         ts = updated.timestamp() if isinstance(updated, datetime.datetime) else 0
+        # A tuple key, ascending on both parts, gives the two-level ordering in
+        # one pass: 0 sorts before 1 so pinned notes lead, and NEGATING the
+        # timestamp turns "largest first" into an ascending compare, which is
+        # what lets one sort() do the work of two.
+        #
+        # 0 is the fallback for an unreadable timestamp, and -0 is the largest
+        # value this half can take — so a damaged row sinks to the bottom of
+        # its group rather than claiming the top.
         return (0 if safe_bool(r['is_pinned'], default=False) else 1, -ts)
+    # Sorted BEFORE the filters, not after. The three filters below are
+    # order-preserving comprehensions, so the answer is identical either way;
+    # doing it first keeps FR10's ordering rule in one place at the top,
+    # ahead of the optional filtering. NFR01 sizes this at 50 notes, so the
+    # comparisons the filters would have saved are not measurable.
     rows.sort(key=_sort_key)
 
+    # Three separate `if` blocks, each rebinding `rows`, rather than one
+    # combined predicate: FR11 specifies AND, and chaining the filters is the
+    # cheapest way to get it — each one only sees what survived the last, and
+    # a filter that was not asked for costs nothing at all.
     if needle:
+        # title and content are joined with a space so a phrase cannot match
+        # across the seam between them ('...my titlethe body...'). safe_text on
+        # both, because a non-text cell would raise on the + and .lower().
         rows = [r for r in rows
                 if needle in (safe_text(r['title']) + ' '
                               + safe_text(r['content'])).lower()]
     if want:
+        # `==` not `in`: FR11 defines the tag filter as an exact match, so
+        # filtering on 'chem' must not sweep up every note tagged 'chemistry'.
+        # _is_tag_text drops non-strings first, since .lower() would raise.
         rows = [r for r in rows
                 if any(want == t.lower()
                        for t in safe_list(r['tags'], _is_tag_text))]
     if pinned_only:
+        # The same default=False the sort key used, so a damaged cell is
+        # treated as unpinned by both and cannot sort to the top of a list it
+        # was then filtered out of.
         rows = [r for r in rows if safe_bool(r['is_pinned'], default=False)]
 
+    # Converted to dicts LAST, so the guard runs only over the rows that
+    # actually survived rather than over every note the student owns.
     return [_note_row_to_dict(r) for r in rows]
 
 
-# --- custom auth (workaround) ----------------------------------------------
-# Anvil's client-initiated signup_with_form / login_with_form raise
-# "PermissionDenied: Cannot access this table from server code" on the users
-# table (a Users-service<->table binding issue). Running the same operations
-# from a trusted server-module callable uses this module's full users-table
-# access, which sidesteps that path. Returns True on success; raises ValueError
-# with a user-facing message otherwise.
+# ===========================================================================
+# SURFACE 4 of 4 — CUSTOM AUTHENTICATION   (spec §5 workaround; FR20)
+# ===========================================================================
+# WHY THESE EXIST AT ALL. Spec §5 says to call
+# anvil.users.login_with_form(allow_signup=True) straight from LoginForm and be
+# done with it. In this app that raises "PermissionDenied: Cannot access this
+# table from server code" against the users table — a Users-service-to-table
+# binding problem, not something the calling code can fix. Running the SAME two
+# operations from a trusted server module instead uses this module's full
+# users-table access and sidesteps that path entirely. LoginForm therefore
+# draws its own two prompts and calls these.
+#
+# WHAT THIS APP NEVER HANDLES. Neither function stores a password, hashes one,
+# or writes anything to the users table itself. The plaintext the student typed
+# is passed straight to anvil.users.signup_with_email / login_with_email, and
+# the Users service does the hashing and the checking behind its own API; the
+# only column DotPoint ever reads off a user row is the email address. That is
+# the whole reason FR20 says "authenticate via the Anvil Users service" rather
+# than describing a scheme of our own.
+#
+# THESE TWO ARE THE ONLY CALLABLES IN THE APP WITHOUT _require_user(), and they
+# have to be: they are how somebody BECOMES a signed-in user. _auth's module
+# docstring names them as the two documented exemptions. Neither takes a row id
+# and neither reads a user-owned table, so there is nothing for NFR03 to scope.
+#
+# Both end by calling _get_or_create_settings, which is what guarantees a
+# usable settings row exists before Main's router asks for one — and both
+# return True on success and raise ValueError, carrying a sentence written for
+# a student, on every failure.
 
 @anvil.server.callable
 def create_account(email: str, password: str) -> bool:
+    """Sign a new student up, log them straight in, and give them settings.
+
+    `email` is the raw text of the sign-up box; it is validated for format and
+    stored lowercased, because it doubles as the account's identity and a
+    student who typed one capital on Tuesday must still sign in on Wednesday.
+    `password` is the plaintext the student typed. It is checked for a minimum
+    length and then handed to Anvil — this app never stores it, hashes it, or
+    keeps it past the end of the call.
+
+    Returns True; the caller (LoginForm) treats any return at all as success
+    and reloads Main, because force_login below has already established the
+    session. Writes one `user_settings` row via _get_or_create_settings, and
+    causes Anvil's Users service to write one `users` row.
+
+    Raises ValueError, never a platform exception, on all three failure modes:
+    a malformed address, a password under _MIN_PASSWORD_LENGTH, and an email
+    already registered. Anvil's UserExists is caught and re-raised as a
+    sentence, because the raw platform error would reach LoginForm's alert box
+    as a class name the student cannot act on.
+    """
     # FORMAT. In DotPoint the account IS the email address: there is no username
     # and no password-reset that does not go through it, so a typo like
     # "sam@gmail.con" creates an account the student can never sign into and never
@@ -986,27 +1314,81 @@ def create_account(email: str, password: str) -> bool:
             "Your password needs to be at least %d characters long."
             % _MIN_PASSWORD_LENGTH)
     try:
+        # The password leaves this function here and is not kept: Anvil's Users
+        # service hashes it behind its own API, and no column DotPoint reads or
+        # writes ever holds it. remember=True issues the "remember me" cookie
+        # that _require_user()'s allow_remembered=True later honours, so a
+        # student who just signed up is not bounced to login on the next load.
         new_user = anvil.users.signup_with_email(email, password, remember=True)
     except anvil.users.UserExists:
+        # Translated into a sentence rather than let through: LoginForm shows
+        # whatever this raises in an alert box, and "anvil.users.UserExists"
+        # tells a student nothing they can do. It is safe to be specific HERE,
+        # unlike in sign_in_with_email — a signup form has to say the address
+        # is taken or there is no way forward, and it is the person who owns
+        # the address asking.
         raise ValueError("An account with that email already exists — try signing in.")
+    # signup_with_email creates the row but does NOT start a session, so
+    # without this the student would be sent back to the login screen to type
+    # the password they just chose.
     anvil.users.force_login(new_user)
+    # Called eagerly rather than left to the first get_settings, so the row is
+    # in place before Main's router asks for it. It also gives the new account
+    # an EMPTY subjects list, which is exactly what the router reads as "not
+    # onboarded" and what sends the student into OnboardingForm (§11).
     _get_or_create_settings(new_user)
     return True
 
 
 @anvil.server.callable
 def sign_in_with_email(email: str, password: str) -> bool:
+    """Sign an existing student in and make sure they have a settings row.
+
+    `email` is the raw text of the sign-in box, trimmed and lowercased so it
+    matches whatever create_account stored. `password` is the plaintext the
+    student typed; as in create_account it is handed straight to Anvil's Users
+    service, which does the checking against its own hash — this app never sees
+    a stored password and has no way to compare one itself.
+
+    Returns True on a successful sign-in; login_with_email has already
+    established the session by then, so LoginForm just reloads Main. Ensures a
+    `user_settings` row exists via _get_or_create_settings, which is the whole
+    reason the function does not simply end at the login call.
+
+    Raises ValueError on both failure modes, and the WORDING is the security
+    decision here: FR20 requires a generic failure message so that email
+    addresses cannot be enumerated, so a wrong password and an address that was
+    never registered are given the identical "Incorrect email or password."
+    Anvil's AuthenticationFailed is caught and replaced for that reason as much
+    as for readability.
+    """
     # Existence only, deliberately. Applying the format and length rules from
     # create_account here would lock out any account created before those rules
     # existed, and an address that fails the pattern still deserves the honest
     # "incorrect email or password" answer rather than a different one that would
     # confirm to a stranger which addresses are registered.
+    # `email or ''` so a client sending None reaches .strip() as a string;
+    # .lower() to match what create_account stored, since a student who
+    # capitalised the first letter today is the same account as yesterday.
     email = (email or '').strip().lower()
+    # A DIFFERENT message from the one below, and that is not an enumeration
+    # leak: an empty box says nothing about which addresses are registered, and
+    # "Incorrect email or password" for a form the student left blank would be
+    # actively misleading.
     if not email or not password:
         raise ValueError("Enter both your email address and your password.")
     try:
+        # remember=True pairs with _require_user()'s allow_remembered=True: it
+        # is what makes the "stay signed in" behaviour work across visits.
         user = anvil.users.login_with_email(email, password, remember=True)
     except anvil.users.AuthenticationFailed:
+        # ONE message for both "no such account" and "wrong password", which is
+        # FR20's requirement: two different answers would let anyone test an
+        # address and learn whether it is registered here.
         raise ValueError("Incorrect email or password.")
+    # The reason this function is not just the login call. An account can
+    # predate the user_settings table, or have been added through the Anvil
+    # Users console, and Main's router reads settings on the very first
+    # navigation — so the row is guaranteed here rather than left to fail later.
     _get_or_create_settings(user)
     return True
