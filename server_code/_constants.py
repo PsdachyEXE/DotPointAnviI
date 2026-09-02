@@ -637,8 +637,11 @@ MAX_TERM_NUMBER = 4
 # than refused, because an unrecognised key is a bug or a probe, and neither
 # deserves an error message that describes the schema back to the sender.
 #
-# Sets and tuples, never lists, so an import cannot append a fifth editable
-# column to the whitelist at runtime.
+# The two key whitelists are sets because every use is a membership test; the
+# two EDITABLE_FIELDS tuples are tuples because nothing may append a fifth
+# editable column to them. Note the sets are ordinary `set` literals, not
+# frozensets — they are not structurally protected the way VALID_TYPES and its
+# neighbours are, so treat them as read-only by convention.
 
 # The filter keys list_assessments recognises (FR06 + FR07's sort_by). Anything
 # else in the filters dict is discarded before the query is built, so a stale
