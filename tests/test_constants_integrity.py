@@ -193,6 +193,41 @@ def _assert_enum_mirror(results, form_file, candidate_names, server_values, labe
                   % (form_file, found[0]))
 
 
+def suite_editor_subject_catalogue(results):
+    """The editor's SUBJECTS list must cover everything the parser can emit.
+
+    AssessmentEditorForm._load guards its preview assignment with
+    `if f.get('subject') in SUBJECTS`. That test is a tripwire rather than a filter:
+    parse_text only ever emits a canonical study name or None, so it is always true in
+    a correctly-built app, and there is deliberately no branch telling the student
+    their subject was unrecognised — that cannot happen from a parse.
+
+    What makes the guard worth having is the possibility of the two catalogues drifting
+    apart, which would make a parsed subject silently fail to select. This suite is what
+    stops that drift, so the guard stays a tripwire and never becomes a live filter
+    quietly dropping the student's answer.
+    """
+    editor = _module_constants('AssessmentEditorForm/__init__.py')
+    results.ok('SUBJECTS' in editor, 'AssessmentEditorForm defines SUBJECTS')
+    if 'SUBJECTS' not in editor:
+        return
+
+    client_subjects = set(editor['SUBJECTS'])
+    # Everything parse_text can put in the 'subject' field: every canonical value an
+    # alias resolves to, which includes the parser-only catch-all.
+    emittable = set(_constants.SUBJECT_ALIASES.values())
+
+    missing = sorted(emittable - client_subjects)
+    results.equal(missing, [],
+                  'the editor offers every subject the parser can emit')
+
+    # And the reverse: a subject in the editor that the parser can never produce would
+    # be an entry the student can pick but never have parsed for them.
+    unreachable = sorted(client_subjects - emittable - set(_constants.CANONICAL_SUBJECTS))
+    results.equal(unreachable, [],
+                  'the editor offers nothing outside the catalogue')
+
+
 def suite_reminder_option_mirrors(results):
     """The two forms offering reminder days must offer the same set.
 
@@ -355,6 +390,7 @@ SUITES = [
     ('subject group mirrors', suite_subject_group_mirrors),
     ('picker catalog', suite_picker_catalog),
     ('enum mirrors', suite_enum_mirrors),
+    ('editor subject catalogue', suite_editor_subject_catalogue),
     ('reminder option mirrors', suite_reminder_option_mirrors),
     ('server constants', suite_server_constants),
     ('no hardcoded client colours', suite_no_client_colours),

@@ -566,23 +566,17 @@ class AssessmentEditorForm(ColumnPanel):
             # the app had recognised it. Leaving it blank makes the student
             # answer, and _validate_fields() will not let Save past until they
             # have.
-            parsed_subject = f.get('subject')
-            if parsed_subject in SUBJECTS:
-                self._select_subject(parsed_subject)
-            elif parsed_subject:
-                # The parser named something, and it is not a VCE study this app
-                # knows. Say so, rather than leaving an empty required dropdown and
-                # no explanation — the student typed a subject and would otherwise
-                # be looking at a blank field wondering why it was ignored.
-                #
-                # This mirrors what _select_choice already does for an unrecognised
-                # type or status. Doing it for two of the three enum-ish fields and
-                # not the third is exactly the kind of inconsistency criterion 7.3
-                # asks to see removed.
-                set_field_error(
-                    self._subject_field,
-                    'This app does not recognise "%s" as a VCE study. '
-                    'Choose the closest one from the list.' % parsed_subject)
+            # The membership test is a tripwire, not a filter. parse_text only ever
+            # emits a canonical study name or None, and SUBJECTS mirrors that same
+            # catalogue, so in a correctly-built app this condition is always true
+            # when a subject was found — there is deliberately no "else" telling the
+            # student their subject was unrecognised, because that cannot happen from
+            # a parse. What it DOES protect against is the two catalogues drifting
+            # apart, in which case a subject silently fails to select rather than
+            # being planted in the dropdown as though the app had recognised it.
+            # tests/test_constants_integrity.py asserts they have not drifted.
+            if f.get('subject') in SUBJECTS:
+                self._select_subject(f.get('subject'))
             # 'type' is only ever absent on a parse that found nothing at all;
             # the fallback value 'other' still goes through _select_choice, so
             # a type the app no longer offers is reported rather than shown as
