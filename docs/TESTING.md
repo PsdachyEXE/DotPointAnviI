@@ -7,28 +7,85 @@ used: **offline unit suites** against the real server modules, a
 journeys** in the running app. Defects found at each layer were fixed and
 re-tested; the trail is recorded below.
 
-## 1. Offline unit suites (14 suites, 974 assertions)
+## 1. Offline unit suites (46 suites, 776 assertions) — **in the repository**
 
-The server modules are pure Python over Anvil's table API, so they are tested
-offline by stubbing `anvil.*` in `sys.modules` and loading `server_code/` as a
-package (harness scripts kept outside the repo; a `run_all.py` runner
-executes the set and exits non-zero if anything fails). All suites pass.
+The server modules are pure Python over Anvil's table API, so they are tested offline.
+`tests/anvil_stub.py` installs a fake `anvil` package into `sys.modules` — rows, tables,
+queries, transactions, users, email and secrets, backed by in-memory dictionaries — and
+`tests/harness.py` synthesises a `server_code` package so the relative imports resolve.
 
-| Suite | Covers | Assertions |
-|---|---|---|
-| parser | Subject/type/weight/date matchers, Term-X-Week-Y resolution, title extraction, confidence tiers across 11 realistic sentences | 11 cases |
-| server-validation | `_urgency_band` bands (FR21), AU date formatting (NFR08), month bounds, date coercion, `_validate_assessment_payload` happy path + 9 rejection paths | 28 |
-| dashboard | Calendar bucketing, per-day highest-urgency colour, month parsing, string-keyed serialization rule | 12 |
-| bulk | `create_bulk_assessments`: all-valid inserts, atomic rejection (no partial writes), empty input | 10 |
-| notes | Note validation (title/tags/pin), pinned-first search ordering, case-insensitive tag + substring query filters, `toggle_pin`, delete-with-unlink | 17 |
-| reminders | Reminder-window thresholds (incl. overdue exclusion), email subject/body content, dispatch + permanent dedup, notifications-off gate | 20 |
-| export/import | JSON round-trip shape, schema rejection, collision renames | (suite) |
-| fixes-regression | Regression locks for the four audited defects (below) | 11 |
-| tz-compat | zoneinfo AND pytz backends: module imports, tz-aware now, junk-timezone rejection | 10 |
-| subjects (§11) | Catalog integrity (aliases cover the catalog, no type-keyword collisions), `set_subjects` rules (maths required, English auto-add, dedupe, unknown/oversize rejection, whitelist lock), parser prioritisation + single-maths remap + fallback, new aliases | 29 |
-| exams (§13) | Timetable integrity (catalog subjects, in-period weekday dates, valid times), verified date spot-checks, English guarantee, days-remaining/urgency decoration, next-exam selection, month bucketing with string keys | 33 |
-| auth/ownership | `_require_user`, the ownership guard, and a source sweep asserting **every** `@anvil.server.callable` resolves the user before touching data | 86 |
-| constants-integrity (§14) | The hand-copied client mirrors still match `_constants.py`; **no client module contains a hex colour**; **every `role=` used in client code has a matching rule in the stylesheet**; both palettes define a colour token for every urgency band | 57 |
+Nothing in `server_code/` is altered, patched or mocked out: **the suites call the same
+functions the live app calls.**
+
+Run them from the repository root:
+
+```bash
+python -m tests.run_all
+```
+
+The runner prints `<n> assertions passed, <m> failed` and exits non-zero on any failure.
+The assertion count below is **counted by the runner, not claimed** — reproduce it in one
+command.
+
+The suites are organised under the marking rubric's own five checks, plus the two
+requirements the teacher's brief adds (guard the database too; write meaningful messages),
+so each group of assertions maps to a row of `docs/VALIDATION.md`.
+
+| File | Suites | Covers | Assertions |
+|---|---|---|---|
+| `test_validation.py` | 7 | The `require_*` / `safe_*` families under the rubric's own headings: existence, type, range, format, reasonableness/completeness, database reads, message quality | 180 |
+| `test_constants_integrity.py` | 7 | The hand-copied client mirrors still match `_constants.py`; the subject picker offers every canonical study and never the parser-only catch-all; alias and legacy-rename integrity; the editable-field whitelist protects the audit columns; **no client module contains a hex colour**; **every `role=` used in client code has a matching stylesheet rule** | 291 |
+| `test_assessments.py` | 8 | Create; the SAME rule applied on all four write paths (create/update/bulk/import); reasonableness; weight formatting; FR02 partial bulk commit; ownership (NFR03) incl. cross-account reads; missing-row consistency; export/import round trip | 96 |
+| `test_notes.py` | 9 | Note field bounds; missing-row consistency; ownership; search surviving a corrupt `tags` column; settings validation; school-term ordering/overlap/uniqueness (FR15); settings read guards; the two VCE program rules; account creation and email format | 78 |
+| `test_reminders.py` | 7 | Due thresholds from untrusted columns; the notifications master switch; skips (completed/undated); permanent dedup (NFR02); failed-send retry; one student's bad data not stopping the run; email content | 58 |
+| `test_nlp.py` | 5 | Parser accuracy unchanged by the new guards; unbounded "in N days"; input bounds; corrupt `school_terms`; corrupt `subjects` | 49 |
+| `test_datetime.py` | 3 | The timezone read guard; DD MMM YYYY display (NFR08); urgency bands (FR21) | 24 |
+| **Total** | **46** | | **776** |
+
+### What these suites are designed to prove
+
+Not merely "the code runs". Each group answers a specific clause of the rubric:
+
+- **"validates all relevant input data"** — every write path is driven with a valid record
+  and then with that record spoiled one field at a time.
+- **"no inconsistencies are present"** — `test_assessments.suite_consistent_across_paths`
+  applies each bad value to create, update AND bulk and asserts all three refuse it. A rule
+  enforced on one path only would fail here.
+- **"reasonableness and completeness"** — records where every field is individually valid
+  and the record is still wrong: a start date after the due date, a mistyped year, a term
+  that runs backwards, a bulk line missing three fields.
+- **"as well as from the database"** — every `safe_*` helper is driven with the values an
+  Anvil `simpleObject` column can actually hold after a console edit (a scalar, a dict,
+  `None`, a part-corrupt list) and asserted never to raise.
+- **"meaningful warning/error messages"** — `suite_messages` takes a representative
+  rejection from every family and asserts mechanically that the text starts with a capital,
+  ends as a sentence, and leaks no developer term (`None`, `isinstance`, `ValueError`,
+  `traceback`).
+- **Security (NFR03)** — a second account is created and asserted unable to read, edit or
+  delete the first account's rows, and to receive an empty list rather than a refusal.
+
+### Regression locks
+
+Every defect fixed in the validation pass has a test that **fails without its fix**:
+
+| Defect | Locked by |
+|---|---|
+| An unresolvable stored timezone took the whole app down | `test_datetime.suite_timezone_read_guard` |
+| Settings could show reminders OFF while the dispatcher emailed | `test_reminders.suite_notifications_switch` |
+| A scalar `reminder_days` skipped a student's whole run | `test_reminders.suite_thresholds` |
+| `"in 99999999999 days"` raised `OverflowError` | `test_nlp.suite_unbounded_day_counts` |
+| Bulk add was all-or-nothing, contradicting FR02 | `test_assessments.suite_bulk_partial_commit` |
+| Bulk rejections reported the wrong line number | `test_nlp.suite_input_bounds` |
+| `get_*` raised where `delete_*` returned `False` | `test_assessments.suite_missing_row_consistency`, `test_notes.suite_note_missing_row_consistency` |
+| Reminder offsets had no upper bound on write or read | `test_validation.suite_range`, `test_reminders.suite_thresholds` |
+| The client subject-group mirrors had drifted from the server | `test_constants_integrity.suite_subject_group_mirrors` |
+
+> **Note on the previous figure.** Earlier revisions of this document cited *14 suites,
+> 974 assertions* with the harness "kept outside the repo". Those scripts were lost with
+> the working directory they lived in, and an assessor could not have run or read them.
+> The suite above was rebuilt from scratch and **committed**, so the claim is now
+> reproducible. The assertion count is lower and the coverage is different — it is
+> concentrated on validation, which is what criterion 7.3 is marked on.
 
 ## 2. Evaluation-criteria measurement (EC-EF-01 / EC-EF-02)
 

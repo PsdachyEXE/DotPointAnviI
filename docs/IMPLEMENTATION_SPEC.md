@@ -30,12 +30,55 @@ Until these three are resolved, the spec below assumes (A), (A), (C). All three 
 ## 0. Glossary & Conventions
 
 ### Naming
+
+The conventions below are the project's declared standard. They are applied to *every*
+solution element — tables, columns, modules, files, classes, functions, methods,
+constants, local variables, parameters, interface controls and event handlers — not
+only to the ones a reader meets first.
+
 - **Data tables**: `snake_case`, plural. `assessments`, `notes`, `user_settings`, `reminder_logs`.
-- **Server module files**: `snake_case.py`. One module per concern: `nlp.py`, `assessments.py`, `notes.py`, `reminders.py`, `dashboard.py`.
-- **Server functions**: `snake_case`, verb-first. `parse_text`, `create_assessment`, `list_assessments`.
-- **Forms**: `PascalCase`, suffix `Form`. `DashboardForm`, `AssessmentEditorForm`, `NoteEditorForm`, `SettingsForm`, `LoginForm`, `ImportExportForm`.
-- **Form instance variables**: prefix `self._` for private state, no prefix for components added to the layout.
-- **Constants**: `UPPER_SNAKE_CASE` at module top. `SUBJECT_ALIASES`, `TYPE_KEYWORDS`, `EDITABLE_FIELDS`.
+- **Data table columns**: `snake_case`. Booleans are phrased as predicates: `is_pinned`, `notifications_enabled`.
+- **Server module files**: `snake_case.py`. One module per concern: `nlp.py`, `assessments.py`, `notes.py`, `reminders.py`, `dashboard.py`, `exams.py`.
+- **Server functions**: `snake_case`, verb-first. `parse_text`, `create_assessment`, `list_assessments`, `_get_due_thresholds`, `_find_next_exam`.
+- **Module-private helpers and modules**: a single leading underscore. `_require_user`, `_row_to_dict`, `_constants.py`, `_validation.py`.
+- **Forms**: `PascalCase`, suffix `Form`. `DashboardForm`, `AssessmentEditorForm`, `NoteEditorForm`, `SettingsForm`, `LoginForm`, `ImportExportForm`, `ExamsForm`, `NotesForm`, `OnboardingForm`.
+- **Form attributes**: prefix `self._` for **everything the form keeps** — both its private
+  state (`self._mode`, `self._assessment_id`) and the interface controls it needs to read
+  or update later (`self._title_tb`, `self._subject_dd`, `self._due_dp`, `self._save_btn`).
+  A component that is built, added to the layout and never referred to again is a plain
+  local, not an attribute.
+  > Corrected 2026-09-02. This line previously read "prefix `self._` for private state, no
+  > prefix for components added to the layout", which is the *opposite* of what the code
+  > does and has always done — all 267 form attributes across the nine forms carry the
+  > underscore. The code was consistent; the specification sentence was wrong.
+- **Interface controls**: named for what they are and suffixed with their type, so a reader
+  knows both the purpose and the widget: `_title_tb` (TextBox), `_subject_dd` (DropDown),
+  `_due_dp` (DatePicker), `_notifications_cb` (CheckBox), `_save_btn` (Button).
+- **Event handlers**: `_on_<thing>_<event>`. `_on_save_click`, `_on_file_change`,
+  `_on_sign_in_click`. Non-trivial handler logic lives in a named method, not an inline
+  lambda, so the handler's name documents what the interaction does.
+- **Constants**: `UPPER_SNAKE_CASE` at module top. `SUBJECT_ALIASES`, `TYPE_KEYWORDS`,
+  `EDITABLE_FIELDS_ASSESSMENT`, `MAX_TITLE_LENGTH`, `VALID_STATUSES`.
+- **Local variables**: named for what they hold, not for their role in the plumbing.
+  `validated_fields` rather than `out`; `assessment_type` rather than `a_type`;
+  `email_subject` and `assessment_subject` rather than two things both called `subject`.
+  Single letters are used only where they are genuinely idiomatic and immediately
+  consumed (a short index loop, `except X as error`).
+- **Avoid shadowing builtins** in local variables. `type` and `id` appear as *data
+  dictionary field names* and dict keys, which is unavoidable and correct, but never as
+  a local.
+
+### Enum values
+
+`type` = `sac | sat | exam | project | homework | other`;
+`status` = `not_started | in_progress | completed`;
+`confidence` = `HIGH | MEDIUM | LOW`.
+
+These live in `_constants.py` as `VALID_TYPES` / `VALID_STATUSES` / `VALID_CONFIDENCE` so
+the four modules that must agree about them cannot drift. They are lowercase, while
+SAT 5 §4.2.1 shows Title Case — a deliberate, recorded divergence (see
+`DISCREPANCIES.md`); the values are persisted in every stored row, mirrored in both
+client forms and keyed in the parser's lookup tables, so the code governs.
 
 ### Anvil project layout (GitHub-backed)
 ```
