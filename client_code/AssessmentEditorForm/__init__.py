@@ -537,7 +537,12 @@ class AssessmentEditorForm(ColumnPanel):
         default_days = [7, 2]
         try:
             settings = get_session_settings()
-            default_days = settings.get('default_reminder_days') or [7, 2]
+            # `is None` again, for the same reason as the edit branch below: a student
+            # who has turned every default reminder off in Settings has stored [], and
+            # `or [7, 2]` would quietly hand it back to them on every new assessment.
+            stored_default = settings.get('default_reminder_days')
+            if stored_default is not None:
+                default_days = stored_default
         except Exception:
             pass
 
@@ -600,7 +605,16 @@ class AssessmentEditorForm(ColumnPanel):
             self._select_choice(self._status_dd, self._status_field,
                                 a.get('status'), STATUS_VALUES, 'Status')
             self._desc_ta.text = a.get('description') or ''
-            self._check_days(a.get('reminder_days') or default_days)
+            # `is None` rather than `or`, because an EMPTY list is a real answer here
+            # and a falsy one. The server distinguishes the two deliberately: a missing
+            # reminder_days means "use the student's defaults", but a stored [] means
+            # "this assessment sends no reminders at all" (assessments.py, the
+            # `if reminder_days is None:` branch). With `or default_days`, unticking
+            # every pill and saving re-ticked 7 and 2 the next time the row was opened,
+            # and _build_payload then wrote them straight back — so "no reminders" was
+            # a setting the student could choose but never keep.
+            stored_days = a.get('reminder_days')
+            self._check_days(default_days if stored_days is None else stored_days)
             # list() copies rather than aliases: _add_link appends to this list
             # in place, and it must not be the same object the server's reply
             # is still holding.

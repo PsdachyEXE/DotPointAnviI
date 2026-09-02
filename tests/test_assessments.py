@@ -322,8 +322,65 @@ def suite_export_import(results):
                       'and %r writes nothing at all' % rubbish[:20])
 
 
+def suite_empty_reminder_days(results):
+    """An empty reminder list means "no reminders", and must survive a round trip.
+
+    The server distinguishes a MISSING reminder_days (use the student's defaults) from
+    an EMPTY one (send nothing for this assessment). Both are legitimate answers, and
+    only one of them is falsy — which is what made this worth a test.
+    """
+    _signed_in()
+
+    # Absent -> the defaults are substituted.
+    row_id = assessments.create_assessment(_valid_record())
+    results.ok(assessments.get_assessment(row_id)['reminder_days'],
+               'an omitted reminder list falls back to the defaults')
+
+    # Empty -> stored empty, NOT replaced by the defaults.
+    row_id = assessments.create_assessment(_valid_record(reminder_days=[]))
+    results.equal(assessments.get_assessment(row_id)['reminder_days'], [],
+                  'an empty reminder list is stored as empty on create')
+
+    # And it must survive an edit, which is where it was being lost.
+    row_id = assessments.create_assessment(_valid_record(reminder_days=[7, 2]))
+    assessments.update_assessment(row_id, {'reminder_days': []})
+    results.equal(assessments.get_assessment(row_id)['reminder_days'], [],
+                  'an empty reminder list is stored as empty on update')
+
+
+def suite_no_falsy_empty_reads(results):
+    """Tripwire: the editor must not treat an empty reminder list as "not set".
+
+    `a.get('reminder_days') or default_days` reads as harmless and is not: an empty
+    list is falsy, so unticking every pill and saving re-ticked the defaults the next
+    time the row was opened, and the payload builder wrote them back. "No reminders"
+    was a setting the student could choose but never keep.
+
+    This is a source check rather than a behaviour check because the client form
+    cannot be imported outside the browser — it pulls in Anvil's UI components.
+    """
+    import os
+    import re
+    from .harness import REPO_ROOT
+
+    editor_path = os.path.join(
+        REPO_ROOT, 'client_code', 'AssessmentEditorForm', '__init__.py')
+    source = open(editor_path, encoding='utf-8').read()
+
+    # Strip comments, so the explanation of the old bug does not trip its own tripwire.
+    code_only = '\n'.join(line.split('#')[0] for line in source.splitlines())
+
+    offenders = re.findall(r"reminder_days'?\s*\)?\s+or\s", code_only)
+    results.equal(offenders, [],
+                  'the editor reads reminder_days with an "is None" test, not "or"')
+    results.ok("stored_days is None" in code_only or "is None else stored_days" in code_only,
+               'and the empty-list case is handled explicitly')
+
+
 SUITES = [
     ('create', suite_create),
+    ('empty reminder days', suite_empty_reminder_days),
+    ('no falsy-empty reads', suite_no_falsy_empty_reads),
     ('same rule on every path', suite_consistent_across_paths),
     ('reasonableness', suite_reasonableness),
     ('weight format', suite_weight_format),

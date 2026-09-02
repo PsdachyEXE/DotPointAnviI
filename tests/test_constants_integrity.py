@@ -145,28 +145,52 @@ def suite_enum_mirrors(results):
     a client that omits one the server accepts makes stored data uneditable — which is
     the bug that silently rewrote a stored type on save.
     """
-    editor = _module_constants('AssessmentEditorForm/__init__.py')
+    # The two forms name these constants differently — AssessmentEditorForm uses TYPES
+    # and STATUSES, DashboardForm prefixes both with an underscore because they are
+    # private to the module. So each is looked up under BOTH names.
+    #
+    # This matters: the first version of this suite looked only for the unprefixed
+    # names and wrapped the DashboardForm half in `if name in dashboard:`, so those two
+    # assertions were silently SKIPPED and the file went untested while the suite
+    # reported green. A test that quietly passes is worse than no test, so a constant
+    # that cannot be found is now a FAILURE rather than a shrug.
+    for form_file, candidate_names in (
+            ('AssessmentEditorForm/__init__.py', ('TYPES', '_TYPES')),
+            ('DashboardForm/__init__.py', ('TYPES', '_TYPES')),
+    ):
+        _assert_enum_mirror(results, form_file, candidate_names,
+                            _constants.VALID_TYPES, 'type')
+    for form_file, candidate_names in (
+            ('AssessmentEditorForm/__init__.py', ('STATUSES', '_STATUSES')),
+            ('DashboardForm/__init__.py', ('STATUSES', '_STATUSES')),
+    ):
+        _assert_enum_mirror(results, form_file, candidate_names,
+                            _constants.VALID_STATUSES, 'status')
 
-    for name, server_values in (('TYPES', _constants.VALID_TYPES),
-                                ('STATUSES', _constants.VALID_STATUSES)):
-        if name not in editor:
-            results.ok(False, 'AssessmentEditorForm defines %s' % name)
-            continue
-        # These are (display label, stored value) pairs; the stored value is what has
-        # to match the server, not the label the student reads.
-        stored_values = set(pair[1] for pair in editor[name])
-        results.equal(stored_values, set(server_values),
-                      'AssessmentEditorForm %s offers exactly the server\'s values' % name)
 
-    dashboard = _module_constants('DashboardForm/__init__.py')
-    for name, server_values in (('TYPES', _constants.VALID_TYPES),
-                                ('STATUSES', _constants.VALID_STATUSES)):
-        if name in dashboard:
-            stored_values = set(
-                pair[1] if isinstance(pair, (tuple, list)) else pair
-                for pair in dashboard[name])
-            results.equal(stored_values, set(server_values),
-                          'DashboardForm %s matches the server enum' % name)
+def _assert_enum_mirror(results, form_file, candidate_names, server_values, label):
+    """Assert one client enum mirror matches the server, whatever it is called.
+
+    `candidate_names` are the names the constant might carry in that form. Not finding
+    any of them is a failure, not a skip — see the note in suite_enum_mirrors.
+    """
+    constants = _module_constants(form_file)
+    found = [name for name in candidate_names if name in constants]
+    results.ok(found,
+               '%s defines its %s list under one of %s'
+               % (form_file, label, ' / '.join(candidate_names)))
+    if not found:
+        return
+
+    # These are (display label, stored value) pairs; the STORED value is what has to
+    # match the server, not the label the student reads on screen.
+    entries = constants[found[0]]
+    stored_values = set(
+        entry[1] if isinstance(entry, (tuple, list)) else entry
+        for entry in entries)
+    results.equal(stored_values, set(server_values),
+                  '%s %s offers exactly the server\'s values'
+                  % (form_file, found[0]))
 
 
 def suite_reminder_option_mirrors(results):
