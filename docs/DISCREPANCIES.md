@@ -96,16 +96,32 @@ each other.
 | A-8 | — | `user_settings.school_terms` accepts **both** the doc's `start`/`end` key names and the code's `start_date`/`end_date`, normalising to the latter on write. | SAT 5 §4.2.3 documents `start`/`end`; the validator enforced `start_date`/`end_date`. A hand-authored or doc-conformant file would have been rejected with a message quoting a key name the reader could not find in the design document. Accepting both costs one normalisation step and removes the contradiction. |
 | A-9 | — | Data-table column names diverge from the data dictionary in three places: `notes.content` (doc: `body`), `user_settings.default_reminder_days` (doc: `reminder_days`), and `user_settings.school_year` (not in the doc at all). Rows are identified by Anvil's own row ids and a `user` link column rather than the doc's `assessment_id` / `user_id` text keys. | Anvil supplies row identity and referential links natively, so re-implementing string keys would have added columns that duplicate what the platform already guarantees. The remaining three name differences are cosmetic and were not worth a live column migration. **Recorded here so the difference is a documented decision rather than an unexplained inconsistency.** |
 
-### What should change in the design document
+### Corrections APPLIED to the design document (2 September 2026)
 
-For the submission, the following corrections to `SoftwareDesign FinalDraft2026.docx` would
-bring the documents in line with the working software — the direction of correction matters,
-because in each case the code's behaviour is the better one:
+The five items below were previously listed here as changes the design document needed.
+They have now been **made**, in
+`SAT/SAT 5/SoftwareDesign FinalDraft2026.docx`, and verified: a script compares every
+field name in the four §4.2 dictionaries against `anvil.yaml`'s `db_schema` and reports
+all four as matching (assessments 16/16, notes 7/7, user_settings 8/8,
+reminder_logs 4/4).
 
-1. §4.2.1 — the `type` and `status` enums to the lowercase value sets (A-1, A-2).
-2. §4.2.2 — `body` to `content` (A-5).
-3. §4.2.3 — `reminder_days` to `default_reminder_days`; add `school_year` (A-9).
-4. §4.2.1 / §4.2.2 — replace the `assessment_id` / `user_id` string keys with Anvil row ids
-   and the `user` link column (A-9).
-5. §4.2.4 — `reminder_logs` has no `log_id` and no `sent_at`; the dedup key is
-   `(assessment_id, user, reminder_type)` as §3.3.2 already states.
+1. §4.2.1 — `type` and `status` corrected to the lowercase value sets (A-1, A-2).
+2. §4.2.2 — `body` corrected to `content`, with the plain-text decision re-attributed
+   honestly as a build decision rather than an SRS constraint (A-5).
+3. §4.2.3 — `reminder_days` corrected to `default_reminder_days`; `theme`,
+   `school_year` and `subjects` documented for the first time (A-9).
+4. §4.2.1 / §4.2.2 / §4.2.4 — the designed `assessment_id` / `note_id` / `log_id` /
+   `user_id` string keys replaced by Anvil's own row ids and the `user` link column,
+   which is what was actually built (A-9).
+5. §4.2.4 — `log_id` and `sent_at` removed (they were never created); `reminder_type`
+   corrected to the underscore spelling `'7_day'` that is actually stored.
+
+**The change is declared, not slipped in.** A dated revision note now sits directly
+under the §4.2 heading explaining that the dictionaries were corrected against the
+software as built, sorting the changes into the three kinds above, and pointing back to
+this file for the reasoning. Individual corrected rows carry a `CORRECTED:` or `ADDED:`
+prefix in their description so a reader can see exactly what moved.
+
+The original is preserved alongside it as
+`SoftwareDesign FinalDraft2026.BACKUP-2026-09-02.docx`.
+
