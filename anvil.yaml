@@ -529,10 +529,16 @@ native_deps:
       margin:var(--dp-s4) 0 !important; padding:0 !important;
       height:0; min-height:0; overflow:hidden; }
 
-    /* a labelled form control: caption, control, optional hint */
+    /* a labelled form control: caption, control, optional hint, error */
     .anvil-role-field { margin:0 0 var(--dp-s3) 0 !important; padding:0 !important; }
     .anvil-role-field .anvil-component { margin:0 !important; }
     .anvil-role-field .anvil-panel-section + .anvil-panel-section { margin-top:3px; }
+
+    /* the per-field validation message (FR04): sits under its own control so the
+       student is told which box is wrong, not merely that something is. Same red as
+       toast_error so the two error channels read as one system. */
+    .anvil-role-fielderror, .anvil-role-fielderror .label-text {
+      font-size:var(--dp-fs-micro) !important; color:var(--dp-bad) !important; }
 
     /* empty states: centred, quiet, never a bare sentence in the corner */
     .anvil-role-empty {

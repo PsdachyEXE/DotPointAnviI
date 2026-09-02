@@ -358,14 +358,91 @@ def make_empty_state(title, hint=None, action_text=None, action_click=None):
     return panel
 
 
-def make_field(label_text, component, hint=None):
-    """A labelled form control: caption above, optional hint below."""
+def make_field(label_text, component, hint=None, required=False):
+    """A labelled form control: caption above, control, optional hint below.
+
+    Returns the ColumnPanel wrapper. The wrapper carries two extras the forms use for
+    validation feedback (SAT criterion 7.3 — SRS FR04 asks for errors "beside the
+    offending field", not in a toast at the corner of the screen):
+
+      * `panel.error_label` — a Label, hidden until something is wrong, that
+        set_field_error() below writes into. It is created up front rather than added
+        on demand so showing a message never re-flows the dialog.
+      * `panel.input_component` — a back-reference to the control itself, so a caller
+        holding only the wrapper can still put the cursor in the offending box.
+
+    `required=True` appends a marker to the caption. The marker is the app's only
+    signal about which fields must be filled in, so it is applied from the same place
+    the label is written and cannot drift out of step with the server's rules.
+    """
     panel = ColumnPanel(role='field')
-    panel.add_component(Label(text=label_text, role='caption'))
+
+    caption = label_text + ' *' if required else label_text
+    panel.add_component(Label(text=caption, role='caption'))
     panel.add_component(component)
+
     if hint:
         panel.add_component(Label(text=hint, role='micro'))
+
+    # Always present, never visible until there is something to say. role='fielderror'
+    # is painted by the stylesheet in the same red as toast_error, so the two error
+    # channels read as one system.
+    error_label = Label(text='', role='fielderror', visible=False)
+    panel.add_component(error_label)
+
+    panel.error_label = error_label
+    panel.input_component = component
     return panel
+
+
+def set_field_error(field_panel, message):
+    """Show `message` under a field built by make_field(), or clear it with None.
+
+    Safe to call on a panel that predates this helper (it simply does nothing), so a
+    form can adopt per-field errors one field at a time.
+    """
+    error_label = getattr(field_panel, 'error_label', None)
+    if error_label is None:
+        return
+    error_label.text = message or ''
+    # Toggling `visible` rather than the text alone means an empty message collapses
+    # the row instead of leaving a blank gap under the control.
+    error_label.visible = bool(message)
+
+
+def clear_field_errors(*field_panels):
+    """Wipe every field message before re-validating, so stale ones never linger."""
+    for panel in field_panels:
+        set_field_error(panel, None)
+
+
+def friendly_error(exception, fallback='Something went wrong. Please try again.'):
+    """Turn an exception from a server call into a sentence worth showing a student.
+
+    The server's validators raise ValueError with text written FOR the student
+    (server_code/_validation.py), so those messages are shown as they are. Anything
+    else — a network drop, an Anvil platform error, a bug — carries a developer
+    string, a class name or a stack fragment that would only confuse the reader, so
+    it is replaced by `fallback`.
+
+    This exists because every form used to do `toast_error(str(e))`, which meant a
+    student who left the due date empty was shown the literal text
+    "invalid date: None". The rubric asks for meaningful messages; this is the single
+    place that decides what "meaningful" means.
+    """
+    message = str(exception or '').strip()
+
+    # A message the app wrote for a person reads as a sentence: it starts with a
+    # capital and ends with a full stop. Developer strings ('title required',
+    # 'invalid subject') and platform errors do neither, which is a reliable enough
+    # test to sort them without tagging every raise site.
+    looks_written_for_a_person = (
+        message
+        and message[0].isupper()
+        and message.endswith(('.', '!', '?'))
+        and len(message) <= 300
+    )
+    return message if looks_written_for_a_person else fallback
 
 
 def make_divider():

@@ -292,6 +292,53 @@ URGENCY_THRESHOLDS = [
 # is to say WHICH band an assessment is in; how that band looks is the client's.
 # The band names above are therefore the whole contract between the two.
 
+# --- Stored value sets (the enums) -----------------------------------------
+# These are the permitted contents of the assessments.type, assessments.status and
+# assessments.confidence columns. They live here, rather than privately inside
+# assessments.py where they used to, because FOUR modules need to agree about them:
+# assessments.py validates writes against them, reminders.py tests a stored status
+# before emailing, dashboard.py filters on them, and the import path checks them.
+# One definition means those four can never drift apart — which is exactly what SAT
+# criterion 7.3's "no inconsistencies are present" is asking for.
+#
+# NOTE ON CASE: these are lowercase, while SAT 5 section 4.2.1 shows Title Case
+# ({SAC, SAT, Test, ...}). That divergence is deliberate and is recorded in
+# docs/DISCREPANCIES.md — the values are persisted in every existing row and mirrored
+# in both client forms, so the code governs. Do not "correct" them toward the
+# document; it would invalidate every stored record and every export file.
+VALID_TYPES = frozenset(('sac', 'sat', 'exam', 'project', 'homework', 'other'))
+VALID_STATUSES = frozenset(('not_started', 'in_progress', 'completed'))
+VALID_CONFIDENCE = frozenset(('HIGH', 'MEDIUM', 'LOW'))
+
+# The single status that means "no more reminders, hide from the default list".
+# Named so the two modules that test for it cannot disagree by a typo.
+STATUS_COMPLETED = 'completed'
+STATUS_DEFAULT = 'not_started'
+
+# --- Field bounds ----------------------------------------------------------
+# Every numeric and length limit the validators enforce, in one place, so the
+# per-field validation table in docs/VALIDATION.md has a single source to cite.
+MAX_TITLE_LENGTH = 200           # assessments.title and notes.title
+MAX_DESCRIPTION_LENGTH = 2000    # assessments.description — one screen of context
+MAX_NOTE_CONTENT_LENGTH = 20000  # notes.content — a full page of study notes
+MAX_TAG_LENGTH = 40              # one notes.tags entry
+MAX_TAGS_PER_NOTE = 20
+MAX_SOURCE_TEXT_LENGTH = 500     # the raw sentence the parser was given
+MIN_WEIGHT = 0.0                 # assessments.weight, a percentage
+MAX_WEIGHT = 100.0
+# Reminder offsets are "days before due". One day is the shortest useful warning and
+# a year is longer than any VCE assessment is set in advance; the upper bound exists
+# because an unbounded value (e.g. 999999) made every assessment permanently "due
+# soon" and emailed the student about all of them on the first scheduler tick.
+MIN_REMINDER_DAY = 1
+MAX_REMINDER_DAY = 365
+MAX_REMINDER_DAYS_PER_ASSESSMENT = 6
+MAX_BULK_LINES = 100             # one paste of the bulk-add box
+MAX_PARSER_INPUT_LENGTH = 500    # one sentence into the parser box
+MAX_SUBJECTS_PER_STUDENT = 12    # a VCE program is 4-6 studies; 12 is generous
+MIN_TERM_NUMBER = 1              # Victorian school year has four terms
+MAX_TERM_NUMBER = 4
+
 # --- Whitelists ------------------------------------------------------------
 ALLOWED_FILTER_KEYS = {'subjects', 'types', 'statuses', 'show_completed', 'sort_by', 'month'}
 ALLOWED_SORT_KEYS = {'due_date', 'weight', 'subject'}
