@@ -22,6 +22,15 @@ DEDUPLICATION (NFR02)
     reminder_logs row is written only after the send succeeds, so a delivery failure
     is retried on the next tick rather than being recorded as sent.
 
+    This is deliberately STRICTER than the key FR14 writes down, which includes
+    sent_date. Keyed on the date as well, a threshold that first came due on a day
+    the app missed would be re-sent the following day as a new (assessment, user,
+    type, date) combination — the student gets the same "due in 7 days" email twice.
+    Dropping the date from the LOOKUP satisfies NFR02's "once per (assessment, user,
+    threshold, day)" by satisfying something narrower: once per threshold, ever.
+    sent_date is still recorded on the row, because the log is also the audit trail
+    for when a reminder actually went out.
+
 WHY THE HELPERS TAKE PLAIN DICTS
     _get_due_thresholds() and _build_email() are pure functions over plain values, not
     over Anvil Rows, so the whole decision — should this email go, and what does it
@@ -99,6 +108,10 @@ def _build_email(assessment: dict, days_remaining: int):
     assessment_subject = assessment.get('subject') or ''
     assessment_type = assessment.get('type') or ''
     due_date = assessment.get('due_date')
+    # The 'no date' arm looks unreachable, and from the dispatcher it is — step 4 of
+    # _process_user skips an assessment with no due date. It stays because this
+    # function is public to the tests and is called with hand-built dicts there, and
+    # because _format_date_au(None) would raise rather than degrade.
     due_display = _format_date_au(due_date) if due_date else 'no date'
     weight = assessment.get('weight')
 
@@ -138,6 +151,12 @@ def _build_email(assessment: dict, days_remaining: int):
 
     # HTML body: the same facts as a definition list. Styles are inline because email
     # clients strip <style> blocks, so the app's stylesheet cannot reach here.
+    # `countdown` and `due_display` are reused rather than recomputed, so the two
+    # bodies of one message can never phrase the same deadline differently.
+    #
+    # The weight row is built as a fragment substituted in below, for the same reason
+    # the text body was assembled as a list: an assessment with no weighting recorded
+    # must leave no empty <dt>/<dd> pair behind.
     weight_html = ''
     if weight is not None:
         weight_html = '<dt>Weight</dt><dd>%g%%</dd>' % weight
@@ -193,6 +212,10 @@ def _process_user(user, run_counts):
     # 3. "Today" must be the student's local today, not the server's UTC today, or an
     #    assessment due tomorrow in Melbourne looks due today to a UTC server.
     today = _user_today(settings)
+    # Read once, outside the loop: it is the same for every assessment this student
+    # owns, and a student with 100 assessments would otherwise re-read the same
+    # settings column 100 times (NFR01). It is NOT guarded here — step 6 hands it to
+    # _get_due_thresholds, which sanitises whichever list it is given.
     default_reminder_days = settings['default_reminder_days']
 
     for assessment in app_tables.assessments.search(user=user):
@@ -213,6 +236,12 @@ def _process_user(user, run_counts):
         #    untrusted simpleObject columns; _get_due_thresholds sanitises whichever
         #    it is handed, so a corrupt override degrades to the default rather than
         #    aborting this student's whole run.
+        #
+        #    The safe_list() call here is a TEST, not the value used — its result is
+        #    thrown away and the raw column is passed on, because _get_due_thresholds
+        #    sanitises again at the point of use. The test is falsiness, so a column
+        #    holding [] or a column holding only junk are treated the same way: both
+        #    fall back to the student's default schedule.
         reminder_days = assessment['reminder_days']
         if not safe_list(reminder_days, is_positive_int):
             reminder_days = default_reminder_days
@@ -266,8 +295,11 @@ def run_reminder_check() -> dict:
         {'sent': int, 'errors': int, 'run_at': ISO-8601 UTC string}
 
     Runs as the app rather than as a signed-in user, which is why it is the one place
-    in the codebase that reads other people's rows — see server_code/README.txt,
-    "What the reminder task can see".
+    in the codebase that reads other people's rows — the single documented exception
+    to NFR03's "every Data Table query scoped to current_user". Nothing it reads
+    leaves the account it belongs to: the only outputs are an email to each account
+    holder's own address and a count in the task log. See server_code/README.txt
+    section 12.3, "Who can see your data".
     """
     # Named keys rather than the two-slot list this used to be: the counters are
     # mutated from a helper, and `run_counts[1] += 1` gave a reader no way to tell

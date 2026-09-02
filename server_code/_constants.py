@@ -2,15 +2,43 @@ import anvil.secrets
 import anvil.tables as tables
 import anvil.tables.query as q
 from anvil.tables import app_tables
-"""Module-level immutable constants for the DotPoint server.
+"""Every shared constant the DotPoint server reads (spec section 2).
 
-Defines: SUBJECT_GROUPS, CANONICAL_SUBJECTS, ENGLISH_GROUP, MATHS_GROUP,
-SUBJECT_ALIASES, TYPE_KEYWORDS, STATUS_KEYWORDS, URGENCY_THRESHOLDS,
-ALLOWED_FILTER_KEYS, ALLOWED_SORT_KEYS, EDITABLE_FIELDS_ASSESSMENT,
-EDITABLE_FIELDS_NOTE, plus APP_BASE_URL (per spec section 6).
+This module is pure DATA: no functions, no @anvil.server.callable, no mutable
+module-level state. Importing it therefore cannot have a side effect, and
+nothing defined here is reachable from a browser.
 
-No functions, no callables (spec section 2). Landed alongside the Assessments +
-NLP slice (spec section 10 steps 2 & 4), which are its first consumers.
+WHY THE VALUES LIVE HERE INSTEAD OF BESIDE THE CODE THAT USES THEM
+------------------------------------------------------------------
+Nearly every table below is read by more than one module, and a few are
+mirrored BY HAND into client code, because Anvil form code cannot import a
+server module. One definition per idea is what stops those copies drifting
+apart, which is exactly what SAT criterion 7.3 ("no inconsistencies are
+present") and NFR06 (maintainability: modules separated by concern, no shared
+mutable state) are asking for. tests/test_constants_integrity.py parses this
+file with `ast` and asserts the client mirrors still agree with it, so a change
+made in only one of the two places fails the suite rather than shipping.
+
+WHAT IS DEFINED HERE
+--------------------
+  Subject catalog  SUBJECT_GROUPS, CANONICAL_SUBJECTS, ENGLISH_GROUP,
+                   MATHS_GROUP, LEGACY_SUBJECT_RENAMES
+  Parser tables    SUBJECT_ALIASES, AMBIGUOUS_BARE_ALIASES, TYPE_KEYWORDS,
+                   STATUS_KEYWORDS (not wired up — see its own note)
+  Urgency          URGENCY_THRESHOLDS
+  Stored values    VALID_TYPES, VALID_STATUSES, VALID_CONFIDENCE,
+                   STATUS_COMPLETED, STATUS_DEFAULT
+  Field bounds     the MIN_* / MAX_* block
+  Whitelists       ALLOWED_FILTER_KEYS, ALLOWED_SORT_KEYS,
+                   EDITABLE_FIELDS_ASSESSMENT, EDITABLE_FIELDS_NOTE
+  Misc             APP_BASE_URL (spec section 6)
+
+Every block below records three things, because rubric 7.2 asks for the "use of
+ALL data": what the keys and values MEAN, where the values CAME FROM (VCAA, the
+client interview, the SRS, or a measured decision), and which modules READ them.
+
+Landed alongside the Assessments + NLP slice (spec section 10 steps 2 & 4),
+which were its first consumers.
 """
 
 # --- Canonical subjects ----------------------------------------------------
@@ -18,8 +46,24 @@ NLP slice (spec section 10 steps 2 & 4), which are its first consumers.
 # app supports, grouped by learning area (source: VCAA "VCE study designs",
 # https://www.vcaa.vic.edu.au/curriculum/vce-curriculum/vce-study-designs/vce-study-designs,
 # retrieved 2026-07-23). Group and subject order is the display order.
+#
+# SHAPE: a tuple of (group heading, tuple of study names). Both levels are
+# tuples rather than lists so nothing can append to the catalog at runtime — a
+# subject that is not in this table must never become selectable, because
+# notes.set_subjects validates the student's picks against it.
+#
+# READ BY: notes.set_subjects (server-side validation of a subject list), and
+# mirrored by hand into client_code/OnboardingForm and client_code/SettingsForm,
+# which build the actual checkbox lists. Those two mirrors are the ones
+# tests/test_constants_integrity.py re-reads with `ast` and compares.
+#
 # 'Mathematics' (the generic catch-all the parser maps bare 'maths' onto) is
 # deliberately NOT in the picker: students lock in a specific maths study.
+# It appears BELOW only as a group HEADING — the word above the four maths
+# studies — which is why the same string can be a parser sentinel and still
+# never be a thing a student can tick. test_constants_integrity asserts both
+# halves of that: the sentinel is a heading, and it is not in
+# CANONICAL_SUBJECTS.
 SUBJECT_GROUPS = (
     ('English', (
         'English', 'English as an Additional Language', 'English Language',
@@ -63,14 +107,44 @@ SUBJECT_GROUPS = (
     )),
 )
 
-# Flat picker catalog, in display order.
+# Flat picker catalog, in display order: the 56 study names from SUBJECT_GROUPS
+# with the group headings dropped. Derived rather than typed out a second time,
+# so adding a study to SUBJECT_GROUPS cannot leave this list behind — and so the
+# catch-all heading 'Mathematics' is structurally unable to appear in it.
+#
+# This is the membership test the rest of the app means when it says "a real
+# subject". READ BY: notes._clean_subjects (validating what the picker sends)
+# and notes._safe_subjects (filtering what the column gives back), dashboard
+# (filter cleaning), exams (its read guard), nlp._is_canonical_subject
+# (filtering the student's locked subjects before alias ranking), and
+# AssessmentEditorForm's subject dropdown.
 CANONICAL_SUBJECTS = tuple(s for _, group in SUBJECT_GROUPS for s in group)
 
-# VCE program rules enforced by notes.set_subjects. The English-group rule is
-# VCAA's ("at least three units from the English group, including a Unit 3-4
-# sequence" — https://www.vcaa.vic.edu.au/curriculum/vce-curriculum/vce-study-designs/english-requirement-satisfactory-completion-vce).
+# The two membership lists behind the VCE program rules that notes._clean_subjects
+# enforces on the way in to notes.set_subjects. Each is a flat tuple of study
+# names, used only for "did the student pick one of these?" — never for display,
+# which is what SUBJECT_GROUPS is for.
+#
+# The English-group rule is VCAA's ("at least three units from the English group,
+# including a Unit 3-4 sequence" —
+# https://www.vcaa.vic.edu.au/curriculum/vce-curriculum/vce-study-designs/english-requirement-satisfactory-completion-vce).
+# A selection with no English study is not rejected: _clean_subjects appends plain
+# 'English' for the student, because the rule is VCAA's and not a mistake they made.
 # The mathematics rule is DotPoint's own (client mandate): VCAA does not
-# require maths for the VCE, but this app's users must track one.
+# require maths for the VCE, but this app's users must track one, so a selection
+# with no maths study IS rejected with a message naming the four choices.
+#
+# READ BY: notes._clean_subjects (both), exams._get_exam_subjects (English only —
+# an exam timetable always includes an English paper), and mirrored by hand into
+# OnboardingForm and SettingsForm so the client can grey out Save before a round
+# trip. test_constants_integrity checks the mirrors.
+#
+# MATHS_GROUP deliberately contains 'Mathematics', the parser catch-all, even
+# though that is not a selectable study: including it costs nothing (a student's
+# stored list is filtered against CANONICAL_SUBJECTS, which excludes it, so it can
+# never actually appear there) and it lets nlp._match_subject use the one list to
+# ask "is this canonical name a maths study?" of a parser result as well as of a
+# student's picks.
 ENGLISH_GROUP = (
     'English', 'English as an Additional Language', 'English Language',
     'Literature',
@@ -80,23 +154,58 @@ MATHS_GROUP = (
     'Mathematical Methods', 'Specialist Mathematics',
 )
 
-# Renamed studies: rows/imports written before a VCAA rename are coerced to
-# the current canonical name at validation time (assessments), so legacy data
-# stays editable and old exports stay importable.
+# Studies VCAA has renamed. KEY = the retired name that may still be sitting in
+# a row or an export file; VALUE = the name the app uses now, which must always
+# be a member of CANONICAL_SUBJECTS (test_constants_integrity asserts this — a
+# rename pointing at a name the catalog no longer holds would "fix" a legacy row
+# into a subject the picker cannot show).
+#
+# Applied at validation time, BEFORE the catalog filter, on every path that
+# accepts a subject name: assessments (a payload, including one from an import
+# file), dashboard (a filter), notes._safe_subjects (a stored settings list).
+# Doing the coercion first is the whole point — a row written in 2022 keeps its
+# subject instead of being silently dropped as unknown, so old data stays
+# editable and old exports stay importable (FR19).
+#
+# One entry so far: VCAA renamed Further Mathematics to General Mathematics for
+# the 2023-2027 study design. SUBJECT_ALIASES still carries the 'further*'
+# aliases separately, because students go on saying the old word out loud.
 LEGACY_SUBJECT_RENAMES = {
     'Further Mathematics': 'General Mathematics',
 }
 
 # SUBJECT_ALIASES maps every lowercased alias the parser might see onto a
-# canonical subject (FR16); nlp._match_subject collects every alias hit with
-# its position and picks the winner (longer phrases beat contained tokens,
-# unambiguous aliases beat AMBIGUOUS_BARE_ALIASES, locked subjects beat
-# non-locked, then earliest mention). Every CANONICAL_SUBJECTS entry appears
-# in SUBJECT_ALIASES.values() (via its own name or a standard shorthand), so
-# assessments._validate_assessment_payload (subject in SUBJECT_ALIASES.values())
-# accepts the whole picker catalog. 'Further Mathematics' was renamed to
-# 'General Mathematics' by VCAA in 2023; the 'further*' aliases are kept for
-# students who still say it.
+# canonical subject (FR16). KEY = what a student types, always lowercase and
+# never punctuated, because nlp._match_subject lowercases the sentence and then
+# looks each key up as a whole-word regex (r'\b' + alias + r'\b'), so a
+# multi-word key like 'maths methods' matches only that exact spacing.
+# VALUE = a CANONICAL_SUBJECTS name, or the 'Mathematics' catch-all.
+#
+# WHERE THE ALIASES CAME FROM: the canonical name of every study (so the table
+# doubles as the accepted-subject list, below), plus the shorthands Will used in
+# the client interview and observation — 'methods', 'spesh', 'swd', 'chem',
+# 'busman', 'revs'. FR16 asks for at least 13; there are ~125 keys for 56
+# studies. Aliases are cheap and a missed one costs a whole parse.
+#
+# THE RANKING IS NOT IN THIS TABLE. Order here is grouping for a human reader
+# only. nlp._match_subject collects EVERY alias hit with its position and then
+# picks the winner (longer phrases beat contained tokens, unambiguous aliases
+# beat AMBIGUOUS_BARE_ALIASES, locked subjects beat non-locked, then earliest
+# mention) — see that function for the algorithm.
+#
+# READ BY: nlp._match_subject (the parse itself); assessments, which builds
+# frozenset(SUBJECT_ALIASES.values()) as the set of subject names a write may
+# carry; and dashboard, which unions those values with CANONICAL_SUBJECTS and
+# LEGACY_SUBJECT_RENAMES to decide which filter values are worth querying.
+# Those two both depend on the invariant that every CANONICAL_SUBJECTS entry
+# appears in SUBJECT_ALIASES.values() (via its own name or a shorthand): it is
+# what makes the alias table accept the whole picker catalog. Adding a study to
+# SUBJECT_GROUPS without adding an alias for it here would make that study
+# unsaveable, so test_constants_integrity checks the reverse direction too —
+# every alias must resolve to a canonical study or to the catch-all.
+#
+# 'Further Mathematics' was renamed to 'General Mathematics' by VCAA in 2023;
+# the 'further*' aliases are kept for students who still say it.
 SUBJECT_ALIASES = {
     # Mathematics family ('math'/'maths' -> the generic catch-all; the parser
     # re-points these at the student's own maths study when they have locked
@@ -237,10 +346,29 @@ SUBJECT_ALIASES = {
     'extended investigation': 'Extended Investigation',
 }
 
-# Bare aliases that are also ordinary sentence words ("health survey for PE",
-# "business case study for Economics"). They still parse when they're the only
-# subject mentioned, but whenever an unambiguous alias appears anywhere in the
-# line it wins regardless of position (see nlp._match_subject ranking).
+# The weak tier of the alias table: SUBJECT_ALIASES keys that are also ordinary
+# English words, so seeing one is much weaker evidence than seeing 'spesh'.
+# Every member must be a key of SUBJECT_ALIASES — this set never adds a way to
+# match a subject, it only demotes one that already exists. A frozenset because
+# nlp._match_subject only ever asks "is this alias in here?" once per candidate.
+#
+# WHY EACH ONE IS IN HERE: 'health survey for PE', 'business case study for
+# Economics', 'media analysis for Literature', 'general revision for Chemistry' —
+# in each of those the weak word appears EARLIER than the real subject, so
+# without this tier the earliest-mention rule would pick the wrong study. The
+# language names are here for the same reason: 'french revolution' and 'greek
+# mythology' use the word as an adjective at least as often as a subject name.
+#
+# WHAT DEMOTION ACTUALLY COSTS: in nlp._match_subject's sort key, ambiguity is
+# the FIRST element, ahead of both the locked-subject preference and position.
+# So an unambiguous alias wins from anywhere in the line, and — deliberately —
+# it wins even when the ambiguous word names one of the student's own locked
+# subjects and the unambiguous one does not. A word that is only sometimes a
+# subject name should not outrank a word that always is.
+# A weak alias still parses normally when it is the only subject mentioned, so
+# 'health essay due Friday' is still Health and Human Development.
+#
+# READ BY: nlp._match_subject only.
 AMBIGUOUS_BARE_ALIASES = frozenset((
     'health', 'business', 'media', 'music', 'art', 'food', 'politics',
     'legal', 'religion', 'eco', 'dance', 'drama', 'computing', 'general',
@@ -252,8 +380,31 @@ AMBIGUOUS_BARE_ALIASES = frozenset((
 ))
 
 # --- Assessment type keywords ----------------------------------------------
-# Maps canonical type -> lowercased trigger keywords. 'other' is the fallback:
-# it never appears as a keyword match, it is assigned when no keyword fires.
+# KEY = a canonical assessment type, and every key here is a member of
+# VALID_TYPES below, so a parse can never produce a type the write path then
+# rejects. VALUE = the lowercased words that trigger it. The vocabulary is the
+# one FR03 fixes for the manual form's type dropdown, so the parser and the
+# dropdown offer the same six things.
+#
+# INSERTION ORDER IS THE PRECEDENCE RULE, not a tidy-looking list. nlp._match_type
+# walks this dict with a plain `for` and returns on the FIRST keyword that fires
+# anywhere in the sentence — and dicts have kept insertion order since Python 3.7,
+# so re-sorting these six lines would silently change how a sentence mentioning
+# two of them is typed. A line naming both a SAC and a SAT is filed as a SAC.
+#
+# 'other' carries an EMPTY keyword list, which is not an oversight — it makes
+# the fallback unreachable through the loop, so the only way to get 'other' is
+# nlp._match_type's explicit `return 'other', None` after the loop. That
+# distinction is what the confidence score reads: a type that came from a real
+# keyword counts as a detected field, a type that fell through to 'other' does
+# not (FR17).
+#
+# 'test' is folded into 'exam' rather than given a type of its own, because FR03
+# fixes the dropdown at these six values: a seventh type would have to be added
+# to the dropdown, the dashboard filters and VALID_TYPES before a single row
+# could store it.
+#
+# READ BY: nlp._match_type only.
 TYPE_KEYWORDS = {
     'sac': ['sac', 'school assessed coursework'],
     'sat': ['sat', 'school assessed task'],
@@ -264,6 +415,19 @@ TYPE_KEYWORDS = {
 }
 
 # --- Status keywords -------------------------------------------------------
+# NOT CURRENTLY WIRED UP — read this before using it. Same shape as
+# TYPE_KEYWORDS (KEY = a VALID_STATUSES member, VALUE = the lowercased words
+# that would trigger it), and it was written for a parser rule that would set an
+# assessment's status from the sentence. That rule was never built: nlp.py does
+# not import this table, and a grep of the whole repo finds no reader outside
+# this file. Every new assessment therefore starts at STATUS_DEFAULT and the
+# student changes it in the editor.
+#
+# Kept rather than deleted because it is the design for a real planned feature
+# and the vocabulary took a while to settle. Anyone wiring it up should note
+# that the phrase order inside each list matters the same way TYPE_KEYWORDS'
+# does: 'completed' is listed ahead of 'complete' precisely because a walk that
+# met the shorter word first would match the front of the longer one.
 STATUS_KEYWORDS = {
     'not_started': ['not started', 'todo', 'to do', 'not begun'],
     'in_progress': ['in progress', 'started', 'ongoing', 'wip'],
@@ -271,12 +435,31 @@ STATUS_KEYWORDS = {
 }
 
 # --- Urgency colour bands (FR21) -------------------------------------------
-# Ordered ascending by threshold; walked in order, first threshold >=
-# days_remaining wins (see _datetime._urgency_band). Concrete bands:
-#   days_remaining < 0          -> 'overdue'
+# A list of (threshold, band name) pairs. THE ORDER IS THE RULE, not decoration:
+# _datetime._urgency_band walks the list from the top and returns the first band
+# whose threshold is >= days_remaining, so the pairs must stay sorted ascending
+# by threshold or an overdue assessment would come back as merely 'soon'.
+# test_constants_integrity asserts the sort, because nothing about the code
+# reading it would fail loudly if someone re-ordered these four lines.
+#
+# THRESHOLD = the largest days_remaining that still belongs to this band, where
+# days_remaining is (due_date - today).days (FR09). Written out concretely:
+#   days_remaining < 0           -> 'overdue'
 #   0 <= days_remaining <= 3     -> 'today'
 #   4 <= days_remaining <= 7     -> 'soon'
 #   days_remaining > 7           -> 'distant'
+# The numbers are FR21's: overdue, today-or-within-3-days, within-7-days, and
+# everything else. FR21 describes the walk as descending and this table is
+# ascending; the two produce identical bands, because "first threshold >=
+# days_remaining, going up" and "first band that fits, going down" select the
+# same row. 9999 is not a real deadline horizon — it is a catch-all large enough
+# that the last row always matches, so _urgency_band's return after the loop
+# stays unreachable in practice.
+#
+# READ BY: _datetime._urgency_band, which is the only thing that walks it, and
+# whose answer reaches assessments, dashboard and exams. client_code/common
+# keeps a hand-written mirror of just the four NAMES (Anvil client code cannot
+# import a server module).
 URGENCY_THRESHOLDS = [
     (-1, 'overdue'),
     (3, 'today'),

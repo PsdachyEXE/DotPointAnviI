@@ -19,28 +19,43 @@ identically everywhere, with one student-readable message per rule.
 THE TWO FAMILIES — this is the important idea in this file
 ----------------------------------------------------------
 The teacher's brief requires guarding "all inputs from the UI, AS WELL AS FROM THE
-DATABASE". Those two jobs need opposite behaviour, so they get two families:
+DATABASE". Those two jobs need OPPOSITE behaviour, and which family a check belongs
+to is settled by one question: is there a person present who can fix this?
 
   require_*  — for data ARRIVING (a form submission, a server argument, an imported
-               file). The caller is a person who can fix their input, so a bad value
-               must STOP the operation. These raise ValueError with a sentence
-               addressed to the student. Nothing is written until they all pass.
+               file). Someone is at the keyboard, so STOPPING is the helpful answer:
+               they are told what is wrong and can correct it. These raise ValueError
+               carrying a sentence written for the student, and every check runs
+               before any write, so a rejected record leaves the database untouched.
 
   safe_*     — for data LEAVING the database (a row the app wrote earlier, possibly
                by an older version of the app, possibly hand-edited in the Anvil Data
-               Tables console). Here there is nobody to correct anything and refusing
-               to render is worse than degrading, so these NEVER raise: they coerce a
-               damaged value to a documented, safe default and carry on. This is what
-               stops one corrupt cell from taking a screen — or the whole app — down.
+               Tables console). There is nobody to correct anything, so raising would
+               turn one damaged cell into a blank screen: refusing to render is worse
+               than degrading. These NEVER raise — they coerce the value to a
+               documented, safe default and carry on.
+
+The two are not interchangeable, and swapping them fails in both directions.
+safe_* on the way IN would quietly store a wrong value the student was standing right
+there to fix. require_* on the way OUT would let one corrupt cell take down a screen —
+or, in safe_timezone()'s case, the entire app, including the Settings page that is the
+only place the bad value can be repaired.
 
 Every rule the rubric names is represented:
   existence   -> require_present, require_text
-  type        -> require_number, require_int, require_list, require_bool, require_text
-  range       -> require_number_in_range, require_int_in_range, require_text (max_length)
-  format      -> require_date, require_email, require_timezone, require_iso_date,
-                 round_percentage
+  type        -> require_number, require_int, require_list, require_bool,
+                 require_text, require_choice
+  range       -> require_number_in_range, require_int_in_range, require_choice,
+                 require_text (max_length)
+  format      -> require_date, require_iso_date_text, require_email,
+                 require_timezone, round_percentage
   reasonable/ -> require_not_after, require_within_horizon, require_complete_record
   completeness
+
+and every column read back out of a table has a degrading twin:
+  safe_text, safe_bool, safe_number, safe_choice, safe_list, safe_date,
+  safe_timezone, plus the element predicates safe_list takes — is_positive_int
+  and is_valid_reminder_day.
 
 MESSAGE STYLE (applies to every string in this file)
 ----------------------------------------------------
@@ -102,8 +117,11 @@ def require_text(value, field_label, max_length, allow_blank=False):
     a field that is absent, a field that is a number, and a field that is 5,000
     characters long all fail for the same reason from the student's point of view.
     """
-    # Type first: a non-string here means the caller (import file, or a client bug)
-    # sent the wrong shape, and .strip() below would raise an unhelpful AttributeError.
+    # None is folded into the empty string rather than rejected as a type error: an
+    # omitted argument and a cleared TextBox both mean "blank", and blankness is
+    # reported below with the right message ("... is required") instead of a
+    # confusing "must be text". Any OTHER non-string is a genuine wrong shape from an
+    # import file or a client bug, and .strip() would raise a bare AttributeError.
     if value is None:
         value = ''
     if not isinstance(value, str):
@@ -133,6 +151,10 @@ def require_choice(value, allowed, field_label):
     cannot.
     """
     if value not in allowed:
+        # sorted() is not cosmetic. `allowed` is usually a frozenset (VALID_TYPES,
+        # VALID_STATUSES), which has no reliable iteration order, so without it the
+        # same mistake could list the options in a different order on each call —
+        # confusing for the student and impossible to assert on in a test.
         raise ValueError(
             'That is not a valid %s. Choose one of: %s.'
             % (field_label.lower(), ', '.join(sorted(str(a) for a in allowed))))
@@ -146,6 +168,8 @@ def require_number(value, field_label):
     booleans explicitly: in Python `bool` subclasses `int`, so `True` would otherwise
     sail through as the number 1.
     """
+    # bool is tested first and on its own: it subclasses int, so the isinstance test
+    # below would accept True and hand back the weight 1.0.
     if isinstance(value, bool):
         raise ValueError('%s must be a number.' % field_label)
     if isinstance(value, (int, float)):
@@ -154,6 +178,9 @@ def require_number(value, field_label):
         try:
             return float(value.strip())
         except ValueError:
+            # Swallowed on purpose, and NOT re-raised here: falling through to the
+            # single raise at the bottom means "25kg", None and {} all produce the
+            # one message, so there is only ever one sentence to keep student-readable.
             pass
     raise ValueError('%s must be a number.' % field_label)
 
@@ -247,6 +274,8 @@ def require_email(value, field_label='Email address'):
     The account IS the email address, so a typo here creates an account the student
     can never sign back into — worth catching before the account exists.
     """
+    # 254 is the longest address a mail server is required to accept (RFC 5321), so
+    # anything past it is a paste accident rather than a real address.
     text = require_text(value, field_label, max_length=254)
     if not _EMAIL_PATTERN.match(text):
         raise ValueError(
@@ -261,10 +290,15 @@ def require_timezone(value, field_label='Timezone'):
     A pattern match is not enough — 'Australia/Melbourn' looks fine and is fatal, so
     the only honest check is to ask the timezone backend to resolve it.
     """
+    # 64 is comfortably past the longest IANA name in use (about 30 characters), and
+    # bounds the string before it is handed to the timezone backend.
     text = require_text(value, field_label, max_length=64)
     try:
         _get_tz(text)
     except Exception:
+        # Deliberately broad: zoneinfo raises ZoneInfoNotFoundError and pytz raises
+        # UnknownTimeZoneError, neither of which this module can name without
+        # importing a backend it has decided not to depend on.
         raise ValueError(
             'That is not a timezone the system recognises. '
             'Use a name like Australia/Melbourne.')
@@ -309,8 +343,13 @@ def require_within_horizon(value, today, field_label):
     Catches the mistyped year — 2062 for 2026, or 0025 for 2025 — which passes every
     type and format check and then silently sorts to the end of the dashboard forever.
     """
+    # Either date missing means there is nothing to measure against, which is not an
+    # error — an optional due date and a caller that has no "today" both land here.
     if value is None or today is None:
         return value
+    # Signed, so one subtraction answers both directions: positive is into the
+    # future, negative is into the past. The two messages differ because "check the
+    # year" means a different typo in each case.
     days_away = (value - today).days
     if days_away > _FUTURE_HORIZON_DAYS:
         raise ValueError(
@@ -326,10 +365,17 @@ def require_within_horizon(value, today, field_label):
 def require_complete_record(record, required_fields, record_label):
     """Completeness: every field in `required_fields` must be present in `record`.
 
+    `record` is a plain dict of the values being submitted. `required_fields` is a
+    sequence of (key, label) pairs — the key to look up, and the label the UI uses for
+    it — so the message can name fields the way the student sees them.
+
     Distinct from calling require_present on each field in turn, because it reports
     ALL the missing pieces in one message. A student fixing a bulk-import line should
     not have to submit four times to discover four omissions.
     """
+    # A comprehension rather than a loop-and-raise for exactly that reason: it
+    # collects every missing label first, and only then raises once. The blank-string
+    # half of the test mirrors require_present — a box holding only spaces is missing.
     missing = [label for key, label in required_fields
                if record.get(key) is None
                or (isinstance(record.get(key), str) and not record[key].strip())]
@@ -370,8 +416,12 @@ def safe_number(stored_value, default=None, minimum=None, maximum=None):
     rule (or arrived through the Data Tables console) would otherwise flow into the
     dashboard and the reminder emails unchecked.
     """
+    # bool is excluded before the numeric test for the same reason as require_number:
+    # it subclasses int, so a stored True would be read back as a weight of 1.0.
     if isinstance(stored_value, bool) or not isinstance(stored_value, (int, float)):
         return default
+    # A bound of None means "no bound", which is why each is tested for None rather
+    # than defaulting to +/-infinity: most callers only constrain one end.
     if minimum is not None and stored_value < minimum:
         return default
     if maximum is not None and stored_value > maximum:
@@ -400,17 +450,37 @@ def safe_list(stored_value, element_check=None, default=None):
     `element_check` is a predicate applied to each element; elements failing it are
     omitted. With no check, every element is kept.
     """
+    # A mutable default cannot be written into the signature — one shared [] would be
+    # handed to every caller, and the first one to append would change it for all of
+    # them. None means "no default supplied" and the empty list is built per call.
     if default is None:
         default = []
+    # Not a list at all (a bare 7 where [7] belongs, or a dict): there are no elements
+    # to filter, so hand back a copy of the default.
     if not isinstance(stored_value, list):
         return list(default)
+    # Every return is a NEW list, never the stored object itself. The value handed in
+    # belongs to an Anvil row's cached cell, and a caller that sorted or appended to
+    # it in place would be editing the database row's own copy.
     if element_check is None:
         return list(stored_value)
+    # The whole point of the family: bad ELEMENTS are dropped and the good ones
+    # survive, so [7, 'x', 2] still yields two usable reminder thresholds. Rejecting
+    # the column outright would throw away data the student can still see and fix.
     return [element for element in stored_value if element_check(element)]
 
 
 def safe_date(stored_value, default=None):
-    """Return a stored date, or `default` when the cell holds anything else."""
+    """Return a stored date, or `default` when the cell holds anything else.
+
+    The read-side twin of require_date, accepting the same three shapes: a date, a
+    datetime (Anvil hands one back for a datetime column), or an ISO 'YYYY-MM-DD'
+    string (which is what a hand-typed console edit leaves behind).
+    """
+    # datetime BEFORE date, exactly as in require_date: datetime.datetime subclasses
+    # datetime.date, so testing date first would return the value unchanged with its
+    # time component still attached, and (due_date - today).days would then be
+    # comparing a datetime against a date and raise.
     if isinstance(stored_value, datetime.datetime):
         return stored_value.date()
     if isinstance(stored_value, datetime.date):

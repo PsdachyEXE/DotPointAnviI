@@ -70,15 +70,68 @@ NO_SELECTION_MESSAGE = 'Pick your subjects first.'
 
 
 class OnboardingForm(ColumnPanel):
+    """The mandatory "What subjects do you do?" gate, shown once after signup.
+
+    Main renders this INSTEAD of the route the student asked for whenever
+    their user_settings.subjects is empty, so the dashboard, notes and exams
+    are all unreachable until studies are locked in.
+
+    The one case where the gate does NOT fire is a failed settings fetch: the
+    router cannot then tell whether subjects exist, and a '#onboarding' hash
+    in that state is sent to the dashboard instead. That is the safe way to be
+    wrong — this form's Confirm OVERWRITES user_settings.subjects, so drawing
+    an empty picker over a selection that is already saved could wipe it. The
+    gate re-fires on the next navigation, once settings load.
+
+    Two VCE program rules are enforced, and _on_confirm checks them in this
+    order because it is the order a student would fix them in:
+      1. at least one mathematics study (a DotPoint client mandate) — a hard
+         block, MATHS_RULE_MESSAGE;
+      2. an English-group study is always present (VCAA) — NOT a block. The
+         server appends 'English' itself, so this form only warns first
+         (ENGLISH_RULE_MESSAGE) and lets the student continue, so the extra
+         subject is never a surprise.
+    Both are re-applied by notes._clean_subjects, which stays the authority.
+
+    No FR covers subject selection — it is spec §11, added after the SRS was
+    written — but the locked-in list is what afterwards feeds FR03's subject
+    dropdown, FR06's subject filter, the Exams view and the parser's alias
+    priority (FR16, nlp._match_subject takes user_subjects).
+
+    Construction: no arguments of its own; the router builds it with a bare
+    OnboardingForm() and `properties` is only Anvil's component keyword set.
+    No modes — but there are two layouts, because a failed catalog fetch
+    replaces the picker and Confirm with a retry/sign-out pair.
+
+    Server callables (both server_code/notes.py):
+      * get_subject_catalog() -> [{'group': str, 'subjects': [str, ...]}, ...],
+        fetched in __init__ to build the picker;
+      * set_subjects(selection) -> the saved user_settings as a dict, called
+        by Confirm. Sole writer of user_settings.subjects.
+
+    Hands nothing back to a caller. On success it seeds the session settings
+    cache from set_subjects' reply, applies the theme and navigates to the
+    dashboard; the only other way off this screen is Sign out.
+    """
+
     def __init__(self, **properties):
+        """Build the page and fetch the subject catalog.
+
+        The one server call this screen makes on load. It is made HERE rather
+        than in a later _load() step because there is nothing to draw without
+        it — the picker is the screen — and because a failure has to replace
+        the layout rather than empty it.
+        """
         super().__init__(**properties)
+        # 1. No padding on the form itself: make_page() below is the centred
+        #    column that carries the page inset on every screen.
         self.spacing_above = 'none'
         self.spacing_below = 'none'
 
         body = make_page()
         self.add_component(body)
 
-        # One hierarchy: page title -> what it's for -> the rules -> the choice.
+        # 2. One hierarchy: page title -> what it's for -> rules -> the choice.
         # The title belongs to the page, not to the card, so it lines up with
         # every other screen; the card below is opened by its own section
         # header instead of borrowing the h1.
@@ -91,13 +144,19 @@ class OnboardingForm(ColumnPanel):
         body.add_component(card)
         card.add_component(make_section_header('Your studies'))
 
-        # The rules sit in a micro line rather than a paragraph because the
-        # student only needs them while they are actually picking.
+        # 3. The rules sit in a micro line rather than a paragraph because the
+        # student only needs them while they are actually picking. Both rules
+        # are stated up front so the maths block at _on_confirm is a reminder
+        # rather than the first the student has heard of it.
         card.add_component(Label(
             text='One mathematics study is required, and an English-group '
                  'study is always kept (VCAA rule).',
             role='micro'))
 
+        # 4. The catalog is the ~56 VCE studies grouped by learning area. It
+        #    comes from the server rather than a client constant so the picker
+        #    and set_subjects' membership test can never offer and reject
+        #    different lists.
         try:
             catalog = anvil.server.call('get_subject_catalog')
         except Exception as e:
@@ -118,14 +177,20 @@ class OnboardingForm(ColumnPanel):
                 'Retry',
                 lambda: open_form('Main')))
             card.add_component(self._sign_out_row())
+            # Early return, so self._picker is never created on this path —
+            # which is safe only because the Confirm button that reads it is
+            # not created either. The card ends with retry + sign out.
             return
 
-        # The picker is a dumb component: it renders the catalog as toggle pills
-        # with live per-group counts and hands back a plain list of names. All
-        # VCE rules are checked below and again server-side in set_subjects.
+        # 5. The picker is a dumb component: it renders the catalog as toggle
+        # pills with live per-group counts and hands back a plain list of
+        # names. All VCE rules are checked below and again server-side in
+        # set_subjects. Kept on self because _on_confirm reads the selection.
         self._picker = SubjectPicker(catalog)
         card.add_component(self._picker)
 
+        # 6. Confirm is the commit; there is no autosave and no draft, so a
+        #    student can toggle freely until they press it.
         confirm_btn = Button(text='Lock in my subjects', role='primary')
         confirm_btn.set_event_handler('click', self._on_confirm)
         # Sign out is a quiet ghost button beside the primary action: it must be
@@ -135,20 +200,42 @@ class OnboardingForm(ColumnPanel):
     # --- shared bits -------------------------------------------------------
     def _sign_out_button(self):
         """The escape hatch, built once so both the normal and error layouts
-        offer exactly the same way out."""
+        offer exactly the same way out.
+
+        Returns a fresh Button each call — a component can only be parented
+        once, so the two layouts need two objects, not one shared one. The
+        click handler defers to common._sign_out, which logs out, clears the
+        session settings cache, resets the theme and routes to '#login'.
+        """
         btn = Button(text='Sign out', role='ghost')
         btn.set_event_handler('click', lambda **e: _sign_out())
         return btn
 
     def _sign_out_row(self):
+        """Sign out on its own row, for the catalog-failure layout where there
+        is no primary action to sit beside."""
         return make_row(self._sign_out_button())
 
     # --- handlers ----------------------------------------------------------
     def _on_confirm(self, **event_args):
+        """'Lock in my subjects' pressed: check the two VCE rules, then save.
+
+        Reads the picker, refuses or warns per the rules, and on success calls
+        set_subjects (the only write on this screen — user_settings.subjects).
+        Returns None; the outcome is a toast, or a navigation to the dashboard.
+
+        These checks are the client's FIRST pass for criterion 7.3. They exist
+        to answer instantly and in the student's own words; notes._clean_subjects
+        applies the same rules to the same list server-side and stays the
+        authority, so nothing here can let a bad selection through.
+        """
+        # 1. selection is a plain list of canonical subject names, in catalog
+        #    order, for the pills currently ticked. The picker holds no other
+        #    state, so this is the whole of the student's answer.
         selection = self._picker.get_selection()
 
-        # Validate in the order the student would fix things: something chosen,
-        # then maths, then the English warning (which is a confirm, not a block,
+        # 2. Validate in the order the student would fix things: something
+        # chosen, then maths, then the English warning (a confirm, not a block,
         # because the server can repair it by appending 'English'). Same three
         # checks, same order, same sentences as the Settings change-subjects
         # flow — the rule must not read differently depending on the screen.
@@ -161,9 +248,16 @@ class OnboardingForm(ColumnPanel):
             toast_error(MATHS_RULE_MESSAGE)
             return
         if not any(s in ENGLISH_GROUP for s in selection):
+            # A confirm(), not a toast: the student is being told what the
+            # server is about to add on their behalf, and declining has to be
+            # possible so they can go back and pick EAL or Literature instead.
+            # `selection` is sent UNCHANGED either way — this form never adds
+            # 'English' itself, because then two places would be appending it.
             if not confirm(ENGLISH_RULE_MESSAGE):
                 return
 
+        # 3. The single write. set_subjects re-runs every rule above, appends
+        #    'English' when needed and returns the whole saved settings row.
         try:
             settings = anvil.server.call('set_subjects', selection)
         except Exception as e:
@@ -175,10 +269,16 @@ class OnboardingForm(ColumnPanel):
                    "and try again."))
             return
 
-        # set_subjects returns the saved settings row, so push it straight into
-        # the session cache: the router reads it on the very next navigation to
-        # decide that onboarding is done, with no second round-trip.
+        # 4. set_subjects returns the saved settings row, so push it straight
+        # into the session cache: the router reads it on the next navigation to
+        # decide that onboarding is done, with no second round-trip. Skipping
+        # this would not just cost a fetch — the gate would still see the
+        # cached empty subjects list and bounce straight back to this screen.
         set_session_settings(settings)
+        # 5. The theme comes from the same row, so apply it here rather than
+        #    leave the dashboard to flash light and then repaint dark.
         apply_theme(settings.get('theme'))
         toast("Subjects locked in — welcome to DotPoint!")
+        # 6. navigate() writes the hash and re-enters Main, which now finds a
+        #    non-empty subjects list and lets the dashboard through.
         navigate('dashboard')

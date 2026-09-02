@@ -2,6 +2,12 @@
 
 Comparing the existing TypeScript/React codebase (per `INVENTORY.md`) against the design intent of `SoftwareDesign_FinalDraft2026.docx` (the Anvil/Python rebuild target). Every row is a place where the two disagree on behaviour, data shape, or design rule — not naming or refactoring differences.
 
+> **Read this first.** The numbered table below was written *before* the Anvil port, and
+> its Recommendation column records what the port was advised to do — not what it did.
+> Where the shipped app departs from that advice it does so deliberately; those departures
+> are recorded in **"Decisions taken in the Anvil build"** at the end of this document.
+> Consult that section for the behaviour of the running software.
+
 Severity scale:
 - **BLOCKER** — affects core behaviour, must be resolved before the Anvil port
 - **NOTABLE** — design drift; needs a decision for the port
@@ -65,3 +71,41 @@ Per the rules, the following were considered and excluded:
 | **NOTABLE** | 19 | 7, 8, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28 |
 | **COSMETIC** | 1 | 21 |
 | **Total** | 28 | |
+
+---
+
+## Decisions taken in the Anvil build (added 2026-09-02)
+
+Everything above compares the **original TypeScript/React app** against the design
+document, and was written *before* the Anvil port. It is a record of what the port had to
+decide, not of what it decided. Several rows recommend "Doc governs" where the shipped
+Anvil app in fact does something else — deliberately, and for reasons recorded below.
+
+This section closes that gap, so the register and the running code no longer contradict
+each other.
+
+| Ref | Row(s) above | What the Anvil build actually does | Why |
+|---|---|---|---|
+| A-1 | 1 | `type` = `sac, sat, exam, project, homework, other` — **lowercase, and the code's value set**, not the doc's `{SAC, SAT, Test, Assignment, Practical, Other}`. Defined once as `_constants.VALID_TYPES`. | The recommendation to let the doc govern assumed a one-shot migration was cheap. By the time the port was live it no longer was: the values are persisted in every stored row, mirrored in both client forms, keyed in `TYPE_KEYWORDS` (which drives the parser), and written into every export file a student may still hold. Changing them would invalidate all of that to gain a cosmetic match. **The design document's §4.2.1 should be corrected to the lowercase set**, not the code. |
+| A-2 | 2 | `status` = `not_started, in_progress, completed` — three states, lowercase. The fourth `submitted` state from the old app was dropped, which is what the doc asked for. | The doc's *intent* (three states, binary show-completed toggle, single-dropdown change per EC-UX-05) is honoured exactly; only the casing differs, and for the same reason as A-1. |
+| A-3 | 3, 4 | `source_text` and `confidence` both exist as nullable text columns and are **excluded from `EDITABLE_FIELDS_ASSESSMENT`**. | Doc governs, as recommended. Excluding them from the whitelist is what makes the FR17 audit trail survive an edit — the student can correct a parsed field without erasing the record of how it was parsed. |
+| A-4 | 5 | `user_settings.timezone` exists, defaults to `Australia/Melbourne`, and is validated against the real IANA database on write and guarded on read. | Doc governs, as recommended. The read guard was added later: a stored value the tz database cannot resolve used to raise inside `_user_now()`, which every screen calls. |
+| A-5 | 6 | Note content is **plain text**, and the editor says so. The column is named `content`, not the doc's `body`. | The plain-text decision stands, but the *reason* recorded above is wrong and has been corrected in the code comments: SRS FR10 actually describes markdown notes. Plain text is a **build decision** — it keeps the editor, the substring search and the export round-trip simple — not an SRS constraint. The column name `content` was chosen at schema-creation time and renaming a live Anvil column is a manual console migration for no behavioural gain. |
+| A-6 | 8 | The reminder-day pill set is fixed at `14 / 7 / 3 / 2 / 1`, and arbitrary integers are additionally bounded server-side to `1..365` with at most six per assessment. | Doc governs, as recommended, plus a server bound the doc did not ask for. The bound was not optional: an unbounded value such as `999999` satisfied every other check and made the assessment permanently "due soon", emailing the student about it on the first scheduler tick. |
+| A-7 | — | **`create_bulk_assessments` commits the valid lines and reports the rest.** It was previously all-or-nothing. | This is a **behaviour change made to match the project's own SRS**. FR02 reads: "Lines that fail validation are reported back to the user with the line number and the reason. Valid lines still commit so a single bad line does not block the rest." The shipped code did the opposite. The design document's §3.3.6 pseudocode also shows per-line commit with a `continue`, so both source documents agreed and only the code disagreed. Locked by `tests/test_assessments.suite_bulk_partial_commit`. |
+| A-8 | — | `user_settings.school_terms` accepts **both** the doc's `start`/`end` key names and the code's `start_date`/`end_date`, normalising to the latter on write. | SAT 5 §4.2.3 documents `start`/`end`; the validator enforced `start_date`/`end_date`. A hand-authored or doc-conformant file would have been rejected with a message quoting a key name the reader could not find in the design document. Accepting both costs one normalisation step and removes the contradiction. |
+| A-9 | — | Data-table column names diverge from the data dictionary in three places: `notes.content` (doc: `body`), `user_settings.default_reminder_days` (doc: `reminder_days`), and `user_settings.school_year` (not in the doc at all). Rows are identified by Anvil's own row ids and a `user` link column rather than the doc's `assessment_id` / `user_id` text keys. | Anvil supplies row identity and referential links natively, so re-implementing string keys would have added columns that duplicate what the platform already guarantees. The remaining three name differences are cosmetic and were not worth a live column migration. **Recorded here so the difference is a documented decision rather than an unexplained inconsistency.** |
+
+### What should change in the design document
+
+For the submission, the following corrections to `SoftwareDesign FinalDraft2026.docx` would
+bring the documents in line with the working software — the direction of correction matters,
+because in each case the code's behaviour is the better one:
+
+1. §4.2.1 — the `type` and `status` enums to the lowercase value sets (A-1, A-2).
+2. §4.2.2 — `body` to `content` (A-5).
+3. §4.2.3 — `reminder_days` to `default_reminder_days`; add `school_year` (A-9).
+4. §4.2.1 / §4.2.2 — replace the `assessment_id` / `user_id` string keys with Anvil row ids
+   and the `user` link column (A-9).
+5. §4.2.4 — `reminder_logs` has no `log_id` and no `sent_at`; the dedup key is
+   `(assessment_id, user, reminder_type)` as §3.3.2 already states.
