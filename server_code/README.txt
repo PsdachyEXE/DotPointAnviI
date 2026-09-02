@@ -12,7 +12,12 @@
 
  This file lives beside the server modules it describes. If you are reading it
  in the Anvil editor, the code it refers to is in the Server Code section on
- your left.
+ your left, and the same document is listed under Assets.
+
+ It is also served straight from the running app, so you can read it in a
+ browser without opening the editor at all:
+
+     https://honored-willing-tea.anvil.app/_/theme/README.txt
 
 
 ===============================================================================

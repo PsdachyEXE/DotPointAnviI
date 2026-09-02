@@ -126,6 +126,13 @@ MAX_WEIGHT = 100.0
 # each other and that every option sits inside the server's accepted range.
 REMINDER_DAY_OPTIONS = (14, 7, 3, 2, 1)
 
+# How many note matches the link picker shows at once. This is a picker inside an
+# already-crowded modal: a student who cannot see the note they want should type a
+# better search rather than scroll a hundred buttons past the Save row. Named rather
+# than inlined because the cap and the "showing the first N" message below it must
+# quote the same number.
+_NOTE_RESULT_LIMIT = 8
+
 # Parser confidence -> chip tone, the date helpers and the page heading all come
 # from common now. They used to be copied into this file, which is how the same
 # confidence ended up a different colour here than on the dashboard.
@@ -559,8 +566,23 @@ class AssessmentEditorForm(ColumnPanel):
             # the app had recognised it. Leaving it blank makes the student
             # answer, and _validate_fields() will not let Save past until they
             # have.
-            if f.get('subject') in SUBJECTS:
-                self._select_subject(f.get('subject'))
+            parsed_subject = f.get('subject')
+            if parsed_subject in SUBJECTS:
+                self._select_subject(parsed_subject)
+            elif parsed_subject:
+                # The parser named something, and it is not a VCE study this app
+                # knows. Say so, rather than leaving an empty required dropdown and
+                # no explanation — the student typed a subject and would otherwise
+                # be looking at a blank field wondering why it was ignored.
+                #
+                # This mirrors what _select_choice already does for an unrecognised
+                # type or status. Doing it for two of the three enum-ish fields and
+                # not the third is exactly the kind of inconsistency criterion 7.3
+                # asks to see removed.
+                set_field_error(
+                    self._subject_field,
+                    'This app does not recognise "%s" as a VCE study. '
+                    'Choose the closest one from the list.' % parsed_subject)
             # 'type' is only ever absent on a parse that found nothing at all;
             # the fallback value 'other' still goes through _select_choice, so
             # a type the app no longer offers is reported rather than shown as
@@ -936,10 +958,8 @@ class AssessmentEditorForm(ColumnPanel):
         # Results are quiet ghost buttons in one wrapping row — they are a
         # picker, not a list the student is meant to read.
         row = make_row()
-        # Capped at 8. This is a picker inside an already-crowded modal, and a
-        # student who cannot see the note they want types a better search
-        # rather than scrolling a hundred buttons past the Save row.
-        for n in notes[:8]:
+        # Capped at _NOTE_RESULT_LIMIT; see the constant for why.
+        for n in notes[:_NOTE_RESULT_LIMIT]:
             # Titles are cached on the way past, so _render_links() can name a
             # linked note without a second call. '(untitled)' stands in for a
             # note saved with an empty title, which is legal.
@@ -950,6 +970,17 @@ class AssessmentEditorForm(ColumnPanel):
             b.set_event_handler('click', lambda nid=n['id'], **e: self._add_link(nid))
             row.add_component(b)
         self._note_results.add_component(row)
+
+        # Say when the list was cut. Without this the ninth match simply is not
+        # there, and a student who knows the note exists has no way to tell whether
+        # the search failed or the list was truncated — so they retype the same
+        # search instead of narrowing it, which is the one thing that would help.
+        if len(notes) > _NOTE_RESULT_LIMIT:
+            self._note_results.add_component(
+                Label(text='Showing the first %d of %d matches — type more of the '
+                           'title to narrow it down.'
+                           % (_NOTE_RESULT_LIMIT, len(notes)),
+                      role='micro'))
 
     def _add_link(self, note_id):
         """Attach a note to this assessment (in memory only, until Save).
