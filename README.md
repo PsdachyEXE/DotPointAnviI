@@ -7,7 +7,7 @@ Assessment tracker for VCE students. Port of the Vite/React/TypeScript app at `C
 **Feature-complete and live-tested.** All spec §10 slices are implemented:
 auth + settings (incl. one-click VIC 2026 term preset), assessments CRUD,
 the regex/lookup NLP parser (parse → confidence-badged preview → save),
-bulk import (atomic), the three-panel dashboard (list + calendar + upcoming,
+bulk import (per-line commit, per SRS FR02), the three-panel dashboard (list + calendar + upcoming,
 filters/sort, clickable urgent days, inline card status changes), notes
 (CRUD/search/tags/pinning) with assessment linking, the 30-minute email
 reminder dispatcher (scheduled task registered), and JSON export/import.
@@ -22,8 +22,11 @@ size is a CSS variable in `anvil.yaml` and no form hardcodes one (§14); and the
 countdown chip + calendar exam markers).
 
 Parser accuracy measured at **30/30 subjects and 30/30 due dates** against the
-EC-EF-01/02 test set (target ≥80%). See `docs/TESTING.md` for the full
-testing evidence and the defect → fix → re-test trail.
+EC-EF-01/02 test set (target ≥80%), reproducible with
+`python -m tests.test_parser_accuracy`. The offline suites stand at **948 assertions
+across 62 suites** (`python -m tests.run_all`). See `docs/TESTING.md` for the full
+testing evidence, what the offline suites deliberately do not cover, and the
+defect → fix → re-test trail.
 
 ## Repository layout
 

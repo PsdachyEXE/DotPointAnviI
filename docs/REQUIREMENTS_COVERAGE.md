@@ -1,5 +1,18 @@
 # DotPoint Requirements Coverage Matrix
 
+> ## ⚠ SUPERSEDED — this file describes the PRE-PORT prototype, not the shipped app
+>
+> Every status below was assessed against the **Vite/React/TypeScript** source that the
+> Anvil app was ported FROM. It is kept as a record of what the port had to decide. It is
+> **not** a statement about the software that exists now, and several of its judgements are
+> the opposite of the truth for the Anvil build — FR18, FR19, NFR06 and NFR07 are rated
+> ABSENT here and all four are implemented and tested.
+>
+> **For the current requirement-by-requirement status, use the FR/NFR completeness
+> checklist in `SAT/SAT 8/TestSpecification2025.docx` §2.1**, which was measured against
+> this repository on 13 September 2026, with `docs/IMPLEMENTATION_SPEC.md` for the
+> FR → module mapping and `docs/TESTING.md` for the evidence.
+
 Maps every requirement in `SRS2026.docx` to its implementation status in the existing Vite/React/TypeScript source at `C:\Coding\DotPoint`, as catalogued in `INVENTORY_annotated.md`.
 
 Status legend:
