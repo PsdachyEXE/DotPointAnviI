@@ -1,0 +1,30 @@
+TC-DBG-01  The failing-then-passing cycle, in full
+===========================================================================
+
+STEP 1 - the assertion was made to say what its description claimed.
+         (term_info is the audit field only the week-phrase path ever sets)
+
+$ python -m tests.run_all
+818 assertions passed, 1 failed
+  FAIL  nlp / accuracy unchanged: a term-and-week phrase still resolves to a date
+(exit 1)
+
+STEP 2 - diagnosed at a breakpoint: see TC-DBG-02_breakpoints.txt.
+         The fixture contained no 'term N' token, so the resolver returned
+         at its first guard and the date came from the weekday instead.
+
+STEP 3 - fixtures corrected, suite_term_week_dates added. First re-run
+         still failed - my EXPECTATION was wrong, not the code:
+
+$ python -m tests.run_all
+836 assertions passed, 3 failed
+  FAIL  nlp / term week dates: term 3 week 5 resolves to the Monday of that week (expected '2026-08-10', got datetime.date(2026, 8, 10))
+  FAIL  nlp / term week dates: term 4 week 2 resolves against term 4, not term 3 (expected '2026-10-12', got datetime.date(2026, 10, 12))
+  FAIL  nlp / term week dates: a weekday inside the phrase moves the date within that week (expected '2026-08-14', got datetime.date(2026, 8, 14))
+(exit 1)
+
+STEP 4 - expectations compared against datetime.date objects. Green:
+
+$ python -m tests.run_all
+839 assertions passed, 0 failed
+(exit 0)
