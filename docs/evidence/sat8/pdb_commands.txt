@@ -1,0 +1,10 @@
+break server_code/nlp.py:455
+break server_code/nlp.py:460
+continue
+p text
+p m
+p settings_row['school_terms'][2]
+where
+clear 1
+clear 2
+quit

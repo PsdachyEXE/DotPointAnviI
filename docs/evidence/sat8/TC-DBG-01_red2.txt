@@ -1,0 +1,6 @@
+$ python -m tests.run_all
+836 assertions passed, 3 failed
+  FAIL  nlp / term week dates: term 3 week 5 resolves to the Monday of that week (expected '2026-08-10', got datetime.date(2026, 8, 10))
+  FAIL  nlp / term week dates: term 4 week 2 resolves against term 4, not term 3 (expected '2026-10-12', got datetime.date(2026, 10, 12))
+  FAIL  nlp / term week dates: a weekday inside the phrase moves the date within that week (expected '2026-08-14', got datetime.date(2026, 8, 14))
+(exit 1)

@@ -1,0 +1,4 @@
+$ python -m tests.run_all
+818 assertions passed, 1 failed
+  FAIL  nlp / accuracy unchanged: a term-and-week phrase still resolves to a date
+(exit 1)

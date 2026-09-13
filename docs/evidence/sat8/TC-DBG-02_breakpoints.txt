@@ -1,0 +1,59 @@
+$ cd DotPointAnviI
+$ python -m pdb -m tests.run_all
+  (session transcript; commands piped from docs/evidence/sat8/pdb_commands.txt)
+
+> c:\users\lachlan\onedrive - haileybury\softwaredevelopment\dotpointanvii\tests\run_all.py(1)<module>()
+-> """Runs every offline suite. From the repository root:  python -m tests.run_all
+(Pdb) Breakpoint 1 at c:\users\lachlan\onedrive - haileybury\softwaredevelopment\dotpointanvii\server_code\nlp.py:455
+(Pdb) Breakpoint 2 at c:\users\lachlan\onedrive - haileybury\softwaredevelopment\dotpointanvii\server_code\nlp.py:460
+(Pdb) > c:\users\lachlan\onedrive - haileybury\softwaredevelopment\dotpointanvii\server_code\nlp.py(455)_try_parse_week_phrase()
+-> if not m:
+(Pdb) 'Methods SAC2 due Friday week 5 worth 25%'
+(Pdb) None
+(Pdb) {'term': 3, 'start_date': '2026-07-13', 'end_date': '2026-09-18'}
+(Pdb)   c:\users\lachlan\appdata\local\programs\python\python313\lib\bdb.py(666)run()
+-> exec(cmd, globals, locals)
+  c:\users\lachlan\onedrive - haileybury\softwaredevelopment\dotpointanvii\tests\run_all.py(41)<module>()
+-> sys.exit(run_suites(collect()))
+  c:\users\lachlan\onedrive - haileybury\softwaredevelopment\dotpointanvii\tests\harness.py(110)run_suites()
+-> suite_fn(results)
+  c:\users\lachlan\onedrive - haileybury\softwaredevelopment\dotpointanvii\tests\test_nlp.py(56)suite_still_parses()
+-> parsed = nlp.parse_text('Methods SAC2 due Friday week 5 worth 25%')
+  c:\users\lachlan\onedrive - haileybury\softwaredevelopment\dotpointanvii\server_code\nlp.py(951)parse_text()
+-> return _parse_one(raw_text, today, settings_row)
+  c:\users\lachlan\onedrive - haileybury\softwaredevelopment\dotpointanvii\server_code\nlp.py(863)_parse_one()
+-> due_date, date_why, term_info, date_src = _extract_date(line, today, settings_row)
+  c:\users\lachlan\onedrive - haileybury\softwaredevelopment\dotpointanvii\server_code\nlp.py(581)_extract_date()
+-> due, matched = _try_parse_week_phrase(text, settings_row)
+> c:\users\lachlan\onedrive - haileybury\softwaredevelopment\dotpointanvii\server_code\nlp.py(455)_try_parse_week_phrase()
+-> if not m:
+(Pdb) Deleted breakpoint 1 at c:\users\lachlan\onedrive - haileybury\softwaredevelopment\dotpointanvii\server_code\nlp.py:455
+(Pdb) Deleted breakpoint 2 at c:\users\lachlan\onedrive - haileybury\softwaredevelopment\dotpointanvii\server_code\nlp.py:460
+(Pdb) 809 assertions passed, 1 failed
+  FAIL  nlp / accuracy unchanged: SUITE CRASHED
+Traceback (most recent call last):
+  File "C:\Users\Lachlan\OneDrive - Haileybury\SoftwareDevelopment\DotPointAnviI\tests\harness.py", line 110, in run_suites
+    suite_fn(results)
+    ~~~~~~~~^^^^^^^^^
+  File "C:\Users\Lachlan\OneDrive - Haileybury\SoftwareDevelopment\DotPointAnviI\tests\test_nlp.py", line 56, in suite_still_parses
+    parsed = nlp.parse_text('Methods SAC2 due Friday week 5 worth 25%')
+  File "C:\Users\Lachlan\OneDrive - Haileybury\SoftwareDevelopment\DotPointAnviI\server_code\nlp.py", line 951, in parse_text
+    return _parse_one(raw_text, today, settings_row)
+  File "C:\Users\Lachlan\OneDrive - Haileybury\SoftwareDevelopment\DotPointAnviI\server_code\nlp.py", line 863, in _parse_one
+    due_date, date_why, term_info, date_src = _extract_date(line, today, settings_row)
+                                              ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Lachlan\OneDrive - Haileybury\SoftwareDevelopment\DotPointAnviI\server_code\nlp.py", line 581, in _extract_date
+    due, matched = _try_parse_week_phrase(text, settings_row)
+                   ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Lachlan\OneDrive - Haileybury\SoftwareDevelopment\DotPointAnviI\server_code\nlp.py", line 455, in _try_parse_week_phrase
+    if not m:
+           ^
+  File "C:\Users\Lachlan\AppData\Local\Programs\Python\Python313\Lib\bdb.py", line 102, in trace_dispatch
+    return self.dispatch_line(frame)
+           ~~~~~~~~~~~~~~~~~~^^^^^^^
+  File "C:\Users\Lachlan\AppData\Local\Programs\Python\Python313\Lib\bdb.py", line 129, in dispatch_line
+    if self.quitting: raise BdbQuit
+                      ^^^^^^^^^^^^^
+bdb.BdbQuit
+
+The program exited via sys.exit(). Exit status: 1
