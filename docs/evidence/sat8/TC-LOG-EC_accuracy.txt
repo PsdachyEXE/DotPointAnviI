@@ -1,0 +1,41 @@
+$ python -m tests.test_parser_accuracy
+
+EC-EF-01 / EC-EF-02 parser accuracy measurement
+today = 2026-09-13 (Sunday); expectations are computed from the student's meaning,
+not read back from the parser. Target for both criteria: 80%.
+
+#   input                                      subject                  due date     ok  
+-----------------------------------------------------------------------------------------
+1   Methods SAC2 due Friday worth 25%          Mathematical Methods     2026-09-18   SD
+2   eng essay due monday                       English                  2026-09-14   SD
+3   english oral presentation next thursday    English                  2026-09-17   SD
+4   bio prac next tuesday                      Biology                  2026-09-15   SD
+5   spesh homework due wednesday               Specialist Mathematics   2026-09-16   SD
+6   swd folio due thursday                     Software Development     2026-09-17   SD
+7   software development sac due saturday      Software Development     2026-09-19   SD
+8   psych test due friday                      Psychology               2026-09-18   SD
+9   methods sac 3 on 12/11                     Mathematical Methods     2026-11-12   SD
+10  phys sac due 1/10 worth 30%                Physics                  2026-10-01   SD
+11  lit essay due 20/10                        Literature               2026-10-20   SD
+12  english essay due 5/11                     English                  2026-11-05   SD
+13  bio sac due 1/3                            Biology                  2027-03-01   SD
+14  softdev SAT due 12 November                Software Development     2026-11-12   SD
+15  physics exam 12 November                   Physics                  2026-11-12   SD
+16  psych sac 12 October worth 20%             Psychology               2026-10-12   SD
+17  chem sac due 3 October                     Chemistry                2026-10-03   SD
+18  physics prac due 15 December               Physics                  2026-12-15   SD
+19  bio sac term 4 week 2                      Biology                  2026-10-12   SD
+20  swd sac term 3 week 5                      Software Development     2026-08-10   SD
+21  specialist maths sac term 4 week 3         Specialist Mathematics   2026-10-19   SD
+22  chemistry sac term 4 week 1                Chemistry                2026-10-05   SD
+23  methods exam term 4 week 8                 Mathematical Methods     2026-11-23   SD
+24  lit oral due term 4 week 5                 Literature               2026-11-02   SD
+25  psych report term 4 friday week 2          Psychology               2026-10-16   SD
+26  chem prac tomorrow                         Chemistry                2026-09-14   SD
+27  literature sac tomorrow worth 15%          Literature               2026-09-14   SD
+28  chem test in 10 days                       Chemistry                2026-09-23   SD
+29  bio exam in 30 days                        Biology                  2026-10-13   SD
+30  psych research report in 21 days           Psychology               2026-10-04   SD
+
+EC-EF-01 subject identification : 30/30 = 100.0%  (target 80%)  MET
+EC-EF-02 due date extraction    : 30/30 = 100.0%  (target 80%)  MET
