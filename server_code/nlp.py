@@ -404,24 +404,51 @@ def _extract_weight(text: str):
     # as a weight, because "SAC 2" and "week 5" put bare numbers in almost every
     # sentence. \s* allows "25 %" as well as "25%", and the optional decimal
     # group accepts the half-marks some studies use ("12.5%").
-    m = re.search(r'(\d+(?:\.\d+)?)\s*(?:%|percent)', text, re.IGNORECASE)
-    if not m:
-        return None, None
-    # The regex already guarantees a float-shaped capture, so this try is for
-    # the impossible case only; it is here because this function sits on the
-    # never-raises path and a bare float() is the one call in it that could.
-    try:
-        weight = float(m.group(1))
-    except (ValueError, TypeError):
-        return None, None
-    # The capture is an unbounded \d+, so a long enough digit run overflows
-    # float() to inf. An out-of-range percentage is still reported (the preview
-    # shows it and create_assessment explains the 0-100 rule in one clear
-    # message), but inf is not a number at all: it cannot survive the JSON trip
-    # to the client, so it is treated as "no weight found".
-    if not math.isfinite(weight):
-        return None, None
-    return weight, m.group(0)
+    #
+    # finditer rather than search, because a candidate can be REJECTED below for
+    # what sits immediately before it. Rejecting has to mean "keep looking", not
+    # "there is no weight in this sentence": in "worth -5% or 25%" the 25 is a
+    # real answer and returning None would throw it away.
+    for m in re.finditer(r'(\d+(?:\.\d+)?)\s*(?:%|percent)', text, re.IGNORECASE):
+        # What precedes the DIGITS decides whether they are the whole number.
+        # The regex cannot see this itself: it starts matching at the first digit,
+        # so anything that makes those digits a fragment of a larger number is
+        # invisible to it and the fragment gets read as the weight.
+        start = m.start(1)
+        before = text[start - 1] if start else ''
+        # "worth -5%" captured the 5 and dropped the sign, so a negative weight
+        # was silently stored as a positive one — the parser reporting HIGH
+        # confidence in a number the student did not type. There is no such thing
+        # as a negative percentage of a study score, so this is not a date to
+        # salvage: treat it as no weight found and let the student fill the box in.
+        if before == '-':
+            continue
+        # "worth .5%" means half a percent; the capture is the 5 alone, which
+        # would be read as ten times the real figure.
+        if before == '.':
+            continue
+        # Scientific notation: in "1e5%" the capture is the EXPONENT, so the
+        # sentence was read as 5%. Only an 'e' that itself follows a digit is a
+        # notation marker — the test is deliberately narrow so ordinary words
+        # ending in 'e' ("grade5%") still parse.
+        if before in ('e', 'E') and start >= 2 and text[start - 2].isdigit():
+            continue
+        # The regex already guarantees a float-shaped capture, so this try is for
+        # the impossible case only; it is here because this function sits on the
+        # never-raises path and a bare float() is the one call in it that could.
+        try:
+            weight = float(m.group(1))
+        except (ValueError, TypeError):
+            continue
+        # The capture is an unbounded \d+, so a long enough digit run overflows
+        # float() to inf. An out-of-range percentage is still reported (the preview
+        # shows it and create_assessment explains the 0-100 rule in one clear
+        # message), but inf is not a number at all: it cannot survive the JSON trip
+        # to the client, so it is treated as "no weight found".
+        if not math.isfinite(weight):
+            continue
+        return weight, m.group(0)
+    return None, None
 
 
 # --- date extraction -------------------------------------------------------

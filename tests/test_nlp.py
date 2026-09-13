@@ -169,6 +169,83 @@ def suite_input_bounds(results):
                   'and the numbering reflects the ORIGINAL paste, gaps included')
 
 
+# --- the weight the student actually typed ----------------------------------
+
+def suite_weight_reading(results):
+    """A percentage must be read as the whole number, not as a fragment of one.
+
+    The regex starts matching at the first digit, so anything that makes those
+    digits part of a larger number is invisible to it. Two sentences were read as
+    a DIFFERENT figure from the one written, silently and at HIGH confidence.
+    """
+    _signed_in()
+
+    # The two confirmed misreads. Both used to return 5.0.
+    results.equal(_fields(nlp.parse_text('Physics sac worth -5%')).get('weight'), None,
+                  'a negative percentage is not read as its positive twin')
+    results.equal(_fields(nlp.parse_text('Physics sac worth 1e5%')).get('weight'), None,
+                  'the exponent of a number in scientific notation is not the weight')
+    # Same family: the capture would have been the 5 of ".5", i.e. ten times over.
+    results.equal(_fields(nlp.parse_text('Physics sac worth .5%')).get('weight'), None,
+                  'a leading decimal point is not dropped')
+
+    # Rejecting a candidate must mean "keep looking", not "there is no weight here".
+    results.equal(
+        _fields(nlp.parse_text('Physics sac worth -5% or 25%')).get('weight'), 25.0,
+        'a rejected candidate does not hide a real percentage later in the sentence')
+
+    # Everything that was already read correctly must still be.
+    for text, expected in (('Physics sac worth 25%', 25.0),
+                           ('Physics sac worth 12.5%', 12.5),
+                           ('Physics sac worth 25 percent', 25.0),
+                           ('Physics sac worth 25 %', 25.0),
+                           ('Physics sac worth 0%', 0.0),
+                           ('Physics sac worth 100%', 100.0),
+                           # The 'e' test is narrow on purpose: an ordinary word
+                           # ending in 'e' must not disqualify the number after it.
+                           ('Physics sac grade5%', 5.0)):
+        results.equal(_fields(nlp.parse_text(text)).get('weight'), expected,
+                      'the parser still reads %r as %s' % (text, expected))
+
+    # Out of range is still REPORTED rather than swallowed: the preview shows it and
+    # create_assessment explains the 0-100 rule in one sentence. Reading it and
+    # refusing to save it are different jobs.
+    results.equal(_fields(nlp.parse_text('Physics sac worth 200%')).get('weight'), 200.0,
+                  'an out-of-range percentage is still read, and refused on save')
+
+
+# --- what the confidence pill actually says ---------------------------------
+
+def suite_confidence_bands(results):
+    """FR17's three bands, and the provenance line beneath each detected field.
+
+    Only HIGH was ever asserted. The whole point of the score is that a student can
+    tell a confident parse from a lucky one, so MEDIUM and LOW need pinning too.
+    """
+    _signed_in()
+
+    # 4 of {subject, type, due_date, weight} -> HIGH.
+    results.equal(nlp.parse_text('Methods SAC2 due friday worth 25%').get('confidence'),
+                  'HIGH', 'all four scored fields gives HIGH')
+    # 2-3 -> MEDIUM. Subject and type only; no date and no weight.
+    results.equal(nlp.parse_text('Methods SAC2').get('confidence'),
+                  'MEDIUM', 'subject and type alone gives MEDIUM')
+    # Fewer than 2 -> LOW. 'type' only counts when a keyword actually fired, and
+    # every parse gets a title, so a bare word scores nothing.
+    results.equal(nlp.parse_text('something').get('confidence'),
+                  'LOW', 'a sentence the parser cannot read gives LOW')
+
+    # The provenance strings. These are what the preview prints under each field,
+    # and FR17/EC-UX-04 rest on them being present and specific.
+    parsed = nlp.parse_text('Methods SAC2 due friday worth 25%')
+    why = parsed.get('why') or {}
+    for field in ('subject', 'type', 'due_date', 'weight'):
+        results.ok(bool(why.get(field)),
+                   'the preview can explain how it read %r' % field)
+    results.ok('25%' in (why.get('weight') or ''),
+               'and the weight explanation quotes the phrase it matched')
+
+
 # --- Term X Week Y, the requirement itself (FR15) ---------------------------
 
 # Every sentence in this file that is meant to exercise the term-and-week resolver
@@ -313,6 +390,8 @@ SUITES = [
     ('accuracy unchanged', suite_still_parses),
     ('unbounded day counts', suite_unbounded_day_counts),
     ('input bounds', suite_input_bounds),
+    ('weight reading', suite_weight_reading),
+    ('confidence bands (FR17)', suite_confidence_bands),
     ('term week dates', suite_term_week_dates),
     ('corrupt school terms', suite_corrupt_school_terms),
     ('corrupt subjects', suite_corrupt_subjects),
