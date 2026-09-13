@@ -322,6 +322,76 @@ def suite_export_import(results):
                       'and %r writes nothing at all' % rubbish[:20])
 
 
+def suite_export_contract(results):
+    """The export file's exact shape, which the importer and FR18 both depend on.
+
+    The round-trip suite above proves an export can be re-imported. It does not
+    pin the things a reader of FR18 would check: the filename pattern, the version
+    number the importer gates on, and the deliberate exclusion of reminder_logs.
+    All three were previously asserted only as "ends with .json".
+    """
+    import json
+
+    _signed_in()
+    assessments.create_assessment(_valid_record(title='Contract'))
+    exported = assessments.export_user_data()
+
+    # FR18 names the filename pattern, and the date in it is the STUDENT'S local
+    # date, not the server's UTC one.
+    name = exported.get_name()
+    results.ok(name.startswith('dotpoint-export-') and name.endswith('.json'),
+               'the export is named dotpoint-export-YYYY-MM-DD.json')
+    results.equal(len(name), len('dotpoint-export-2026-01-01.json'),
+                  'and the date in the name is a full YYYY-MM-DD')
+
+    payload = json.loads(exported.get_bytes().decode('utf-8'))
+    results.equal(payload.get('version'), 1,
+                  'the payload carries version 1, which the importer gates on')
+    for key in ('assessments', 'notes', 'settings', 'exported_at'):
+        results.ok(key in payload, 'the payload carries %r' % key)
+    # FR18: "reminder_logs is excluded because it is transient."
+    results.ok('reminder_logs' not in payload,
+               'and reminder_logs is excluded, as FR18 requires')
+
+
+def suite_parser_audit_trail(results):
+    """source_text and term_info are trimmed, never refused (a documented choice).
+
+    _trim_parser_text bounds these two columns without raising, because they hold
+    the parser's own echo of what it read rather than something the student typed
+    into a labelled box: refusing a whole assessment over its provenance note would
+    help nobody, and an export written before the cap existed still has to import.
+    That behaviour had no test, so nothing distinguished it from an oversight.
+    """
+    from server_code._constants import MAX_SOURCE_TEXT_LENGTH
+
+    _signed_in()
+
+    over_long = 'x' * (MAX_SOURCE_TEXT_LENGTH + 200)
+    row_id = assessments.create_assessment(_valid_record(source_text=over_long))
+    stored = assessments.get_assessment(row_id)['source_text']
+    results.equal(len(stored), MAX_SOURCE_TEXT_LENGTH,
+                  'an over-long source_text is trimmed to the cap, not refused')
+
+    # A wrong TYPE is still refused — the trim is a length concession, not a
+    # blanket "anything goes" on these columns.
+    results.raises(
+        ValueError,
+        lambda: assessments.create_assessment(_valid_record(source_text=12345)),
+        'but a non-text source_text is still refused')
+
+    # Whitespace-only collapses to None, so the column has one empty state.
+    row_id = assessments.create_assessment(_valid_record(source_text='   '))
+    results.equal(assessments.get_assessment(row_id)['source_text'], None,
+                  'a whitespace-only source_text is stored as None')
+
+    # The parser's own output can never hit the cap anyway: parse_text bounds its
+    # input to the same number, which is why this is a guard for hand-made and
+    # imported payloads rather than for the normal path.
+    results.equal(MAX_SOURCE_TEXT_LENGTH, 500,
+                  'and the cap matches the parser input bound it mirrors')
+
+
 def suite_empty_reminder_days(results):
     """An empty reminder list means "no reminders", and must survive a round trip.
 
@@ -346,6 +416,19 @@ def suite_empty_reminder_days(results):
     assessments.update_assessment(row_id, {'reminder_days': []})
     results.equal(assessments.get_assessment(row_id)['reminder_days'], [],
                   'an empty reminder list is stored as empty on update')
+
+    # The SERVER-SIDE mirror of the same fault. On a create, a missing
+    # reminder_days means "I did not supply this column, use my defaults"; on an
+    # edit the key is only present because the student changed it, so None is not
+    # "absent" and must not be read as a request for the defaults. Sending it used
+    # to re-arm the 7- and 2-day emails on an assessment deliberately silenced.
+    row_id = assessments.create_assessment(_valid_record(reminder_days=[]))
+    results.raises(
+        ValueError,
+        lambda: assessments.update_assessment(row_id, {'reminder_days': None}),
+        'an edit sending None is refused rather than re-armed with the defaults')
+    results.equal(assessments.get_assessment(row_id)['reminder_days'], [],
+                  'and the row is left exactly as the student set it')
 
 
 def suite_no_falsy_empty_reads(results):
@@ -388,4 +471,6 @@ SUITES = [
     ('ownership (NFR03)', suite_ownership),
     ('missing row consistency', suite_missing_row_consistency),
     ('export/import round trip', suite_export_import),
+    ('export contract (FR18)', suite_export_contract),
+    ('parser audit trail', suite_parser_audit_trail),
 ]

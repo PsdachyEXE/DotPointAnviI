@@ -342,6 +342,21 @@ def _validate_field(key, value, user, existing=None, today=None):
     Raises whatever _validate_assessment_payload raises.
     """
     existing = existing or {}
+    # 'reminder_days' is the one editable column whose None means something
+    # different on an edit than on a create, so it is settled here rather than by
+    # the shared rule. _validate_assessment_payload reads None as "the caller did
+    # not supply this column, fall back to the student's defaults" — correct for a
+    # create, wrong for a patch, because update_assessment is sent only the keys
+    # the student actually changed, so the key BEING PRESENT is the statement that
+    # it was set. Left to the shared rule, an edit carrying None re-armed the
+    # default 7- and 2-day emails on an assessment the student had deliberately
+    # silenced. That is the same "an empty list is not an absent one" fault fixed
+    # on the client in 6dae1dd, one layer further down; the server distinguishes
+    # None from [] everywhere else, and this was the last place it did not.
+    if key == 'reminder_days' and value is None:
+        raise ValueError(
+            'Reminder days must be a list — send an empty list to turn reminders '
+            'off for this assessment.')
     # A stub that satisfies the four required fields, so the shared validator can
     # run at all. These placeholders are never persisted: only validated[key] is
     # returned. 'x' and 'other' are simply the cheapest legal values, and the
