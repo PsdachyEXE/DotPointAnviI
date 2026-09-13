@@ -327,6 +327,46 @@ def suite_server_constants(results):
                'STATUS_DEFAULT is a member of VALID_STATUSES')
 
 
+def suite_empty_states_name_their_cause(results):
+    """A list emptied by FILTERS must not be described as a list never filled.
+
+    FR07 asks for a message rather than a blank panel when nothing matches. Both
+    list panels satisfy the letter of that, but for a long time only NotesForm
+    satisfied its point: the dashboard said "Nothing here yet" to a student with
+    seventeen assessments who had narrowed the filters to Literature + Exam,
+    which describes their account rather than their filters and reads as data
+    loss. The row count cannot tell the two cases apart — both arrive with an
+    empty list — so each panel has to ask its own controls.
+
+    A source check, because a client form cannot be imported outside the browser:
+    it pulls in Anvil's UI components. It asserts the SHAPE that makes the
+    distinction possible, not the exact wording, so the sentences stay editable.
+    """
+    for form, helper in (('DashboardForm', '_filters_are_narrowed'),
+                         ('NotesForm', '_make_empty')):
+        path = os.path.join(CLIENT_DIR, form, '__init__.py')
+        source = open(path, encoding='utf-8').read()
+        code_only = '\n'.join(line.split('#')[0] for line in source.splitlines())
+
+        results.ok(helper in code_only,
+                   '%s decides its empty state from the filters (%s)'
+                   % (form, helper))
+        # Two distinct empty-state calls: one for "you have nothing", one for
+        # "nothing matches". A single call cannot be telling them apart.
+        results.ok(code_only.count('make_empty_state(') >= 2,
+                   '%s offers more than one empty-state wording' % form)
+
+    dashboard = open(os.path.join(CLIENT_DIR, 'DashboardForm', '__init__.py'),
+                     encoding='utf-8').read()
+    results.ok('No assessments match' in dashboard,
+               'and the dashboard has a wording for the over-filtered case')
+    # The escape hatch matters as much as the sentence: the control that would
+    # normally let the student see their data again is inside the panel that is
+    # empty.
+    results.ok('_on_clear_filters_click' in dashboard,
+               'which also offers a way to clear the filters')
+
+
 # --- design-system tripwires ------------------------------------------------
 
 _HEX_COLOUR = re.compile(r'#[0-9a-fA-F]{3,8}\b')
@@ -393,6 +433,7 @@ SUITES = [
     ('editor subject catalogue', suite_editor_subject_catalogue),
     ('reminder option mirrors', suite_reminder_option_mirrors),
     ('server constants', suite_server_constants),
+    ('empty states name their cause', suite_empty_states_name_their_cause),
     ('no hardcoded client colours', suite_no_client_colours),
     ('roles have styles', suite_roles_have_styles),
 ]

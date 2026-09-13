@@ -375,6 +375,36 @@ class DashboardForm(ColumnPanel):
             f['types'] = [typ]
         return f
 
+    def _filters_are_narrowed(self):
+        """True when any filter control is off its "show everything" setting.
+
+        Asked by the empty state to tell "this account has nothing in it" from
+        "these filters match nothing". Reads the SAME sentinels _build_filters
+        reads — 'All' for the subject dropdown, '' for status and type — so the
+        two can never disagree about what "narrowed" means.
+
+        'show_completed' is deliberately NOT counted. Leaving it unticked is the
+        default view, so counting it would make every empty account look
+        over-filtered; and ticking it only ever ADDS rows, so it cannot be the
+        reason a list came back empty.
+        """
+        subject = self._subject_dd.selected_value
+        return bool((subject and subject != 'All')
+                    or self._status_dd.selected_value
+                    or self._type_dd.selected_value)
+
+    def _on_clear_filters_click(self, **event_args):
+        """Put the three filter dropdowns back to "all" and reload.
+
+        Offered by the over-filtered empty state, where the student has hidden
+        their own data and the panel that would normally let them see it again
+        is the panel that is empty.
+        """
+        self._subject_dd.selected_value = 'All'
+        self._status_dd.selected_value = ''
+        self._type_dd.selected_value = ''
+        self._refresh()
+
     def _refresh(self):
         """Re-fetch the whole dashboard and redraw every part of it.
 
@@ -539,13 +569,26 @@ class DashboardForm(ColumnPanel):
             make_section_header('Your assessments', count))
         if not rows:
             # FR07 asks for a message rather than a blank panel when nothing
-            # matches. The wording assumes a new student rather than an
-            # over-filtered one, because with the filters left alone (the
-            # default view) that is the only way this branch is reached.
-            self._list_panel.add_component(make_empty_state(
-                'Nothing here yet',
-                'Type an assessment above and press Parse, or add one manually.',
-                'Add manually', self._on_add_click))
+            # matches, and the two ways of arriving here need different
+            # sentences. A student with seventeen assessments who has narrowed
+            # the list to Literature + Exam is not a new student, and telling
+            # them "Nothing here yet" describes their account rather than their
+            # filters — it reads as data loss. Which case this is cannot be read
+            # from the row count (both arrive with an empty list); only the
+            # controls know, which is what _filters_are_narrowed asks them.
+            # NotesForm has drawn the same distinction since it was written;
+            # this panel not drawing it was the inconsistency, not the wording.
+            if self._filters_are_narrowed():
+                self._list_panel.add_component(make_empty_state(
+                    'No assessments match',
+                    'Nothing matches those filters. Set them back to "All" to '
+                    'see everything.',
+                    'Clear filters', self._on_clear_filters_click))
+            else:
+                self._list_panel.add_component(make_empty_state(
+                    'Nothing here yet',
+                    'Type an assessment above and press Parse, or add one manually.',
+                    'Add manually', self._on_add_click))
             return
         for a in rows:
             self._list_panel.add_component(self._make_card(a))
