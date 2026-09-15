@@ -573,6 +573,50 @@ def _next_weekday(today: datetime.date, target_wd: int) -> datetime.date:
     return today + datetime.timedelta(days=delta)
 
 
+def _weekday_next_week(today: datetime.date, target_wd: int) -> datetime.date:
+    """The `target_wd` of NEXT week (0=Mon), whatever day of this week it is.
+
+    `today` is the student's local today; `target_wd` is a 0-6 value out of
+    _WEEKDAYS. Used by _extract_date step 5 for an explicit 'next friday'.
+
+    Anchored on the week rather than counted forward from today, which is what
+    makes it stable: "next Thursday" means the Thursday of next week whether it
+    is said on Monday or on Thursday. Adding seven days to _next_weekday would
+    give the right answer on a Tuesday and a fortnight away on a Thursday,
+    because _next_weekday has already skipped a week by then.
+
+    Weeks start on Monday here, matching the dashboard calendar (dashboard.py
+    builds its grid Monday-first) so the app has one idea of where a week begins.
+    """
+    monday_this_week = today - datetime.timedelta(days=today.weekday())
+    return monday_this_week + datetime.timedelta(days=7 + target_wd)
+
+
+def _date_why(matched: str, d: datetime.date, rolled: bool = False,
+              note: str = None) -> str:
+    """The provenance sentence shown under the due-date field in the preview.
+
+    `matched` is the literal text that fired, `d` the resolved date. `rolled` is
+    True when the date the student wrote had already passed and the year was
+    moved forward; `note` adds any other clarification.
+
+    The roll is the reason this helper exists. Three separate branches below
+    move a past date into next year, and each used to report the result in the
+    same words it uses for a date that needed no adjustment — so the student saw
+    a correct-looking date and no indication that the parser had changed the year
+    on them. Beta testing found exactly that: "due 12/09" typed three days after
+    the 12th was stored as the following September, 362 days away, and both
+    testers said the screen gave them nothing to notice it by. The resolved date
+    is not the fix; saying that a decision was made is.
+    """
+    why = 'matched "%s" → %s' % (matched, d.strftime('%d %b %Y'))
+    if rolled:
+        return why + ' (that date has already passed, so it was read as next year)'
+    if note:
+        return why + ' (%s)' % note
+    return why
+
+
 def _extract_date(text: str, today: datetime.date, settings_row):
     """When the assessment is due. Ordered regex chain; first match wins.
 
@@ -636,10 +680,13 @@ def _extract_date(text: str, today: datetime.date, settings_row):
         d = _safe_date(year, month, day)
         if d is not None:
             # No explicit year and already past -> roll to next year (matches the
-            # month-name branch and the parser's future-oriented intent).
+            # month-name branch and the parser's future-oriented intent). The
+            # roll is REPORTED rather than made quietly - see _date_why.
+            rolled = False
             if m.group(3) is None and d < today:
                 d = _safe_date(today.year + 1, month, day) or d
-            return d, 'matched "%s" → %s' % (m.group(0), d.strftime('%d %b %Y')), week_phrase_text, m.group(0)
+                rolled = True
+            return d, _date_why(m.group(0), d, rolled), week_phrase_text, m.group(0)
 
     # 3. 'tomorrow' / 'today'.
     if re.search(r'\btomorrow\b', low):
@@ -659,11 +706,29 @@ def _extract_date(text: str, today: datetime.date, settings_row):
             d = today + datetime.timedelta(days=days_ahead)
             return d, 'matched "%s" → %s' % (m.group(0), d.strftime('%d %b %Y')), week_phrase_text, m.group(0)
 
-    # 5. Weekday names ('next friday', 'friday'). Bare 'sat' excluded (SAT type).
-    m = re.search(r'\b(?:next\s+|this\s+)?(' + '|'.join(_FREE_WEEKDAYS) + r')\b', low)
+    # 5. Weekday names ('next friday', 'this friday', 'friday'). Bare 'sat' is
+    #    excluded from _FREE_WEEKDAYS because it collides with the SAT type.
+    #
+    #    The modifier is CAPTURED, not merely absorbed. It used to sit in a
+    #    non-capturing group, so 'next thursday', 'this thursday' and a bare
+    #    'thursday' all resolved to the same day - the soonest one - and a
+    #    student who wrote 'next' silently got a deadline a week early. That
+    #    is not the harmless direction: they work to the early date, watch it
+    #    pass, and the real deadline then arrives with nothing tracked against
+    #    it. Found by beta testing (U01), who caught it only because they were
+    #    checking - 'the preview looks completely confident about it'.
+    m = re.search(r'\b(?:(next|this)\s+)?(' + '|'.join(_FREE_WEEKDAYS) + r')\b', low)
     if m:
-        d = _next_weekday(today, _WEEKDAYS[m.group(1)])
-        return d, 'matched "%s" → %s' % (m.group(0), d.strftime('%d %b %Y')), week_phrase_text, m.group(0)
+        target_wd = _WEEKDAYS[m.group(2)]
+        if m.group(1) == 'next':
+            d = _weekday_next_week(today, target_wd)
+            why = _date_why(m.group(0), d,
+                            note='the %s of next week' % d.strftime('%A'))
+        else:
+            # A bare weekday and 'this' keep the original reading: soonest.
+            d = _next_weekday(today, target_wd)
+            why = _date_why(m.group(0), d)
+        return d, why, week_phrase_text, m.group(0)
 
     # 6. Month-name dates, in both orders a student might write them. The
     #    day-first form is tried FIRST and the month-first form only if it
@@ -680,16 +745,20 @@ def _extract_date(text: str, today: datetime.date, settings_row):
             month, day = _MONTHS[m2.group(1)], int(m2.group(2))
             d = _safe_date(today.year, month, day)
             if d is not None:
+                rolled = False
                 if d < today:
                     d = _safe_date(today.year + 1, month, day) or d
-                return d, 'matched "%s" → %s' % (m2.group(0), d.strftime('%d %b %Y')), week_phrase_text, m2.group(0)
+                    rolled = True
+                return d, _date_why(m2.group(0), d, rolled), week_phrase_text, m2.group(0)
     else:
         day, month = int(m.group(1)), _MONTHS[m.group(2)]
         d = _safe_date(today.year, month, day)
         if d is not None:
+            rolled = False
             if d < today:
                 d = _safe_date(today.year + 1, month, day) or d
-            return d, 'matched "%s" → %s' % (m.group(0), d.strftime('%d %b %Y')), week_phrase_text, m.group(0)
+                rolled = True
+            return d, _date_why(m.group(0), d, rolled), week_phrase_text, m.group(0)
 
     # 7. dateparser fallback (optional dependency, spec section 7): free-form
     #    English the rules above do not cover, such as "end of next month".

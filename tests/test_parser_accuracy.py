@@ -69,6 +69,20 @@ def _next_weekday(today, target):
     return today + datetime.timedelta(days=ahead or 7)
 
 
+def _next_week_weekday(today, target):
+    """The `target` weekday of NEXT week (0 = Monday).
+
+    Deliberately NOT written as _next_weekday(today, target) + 7 days, and
+    deliberately not calling anything in server_code. Both shortcuts would make
+    the expectation true by construction, which is the exact failure the SAT 8
+    case study was about: an assertion that cannot fail is worse than no
+    assertion. This counts from the Monday of this week, the way a person does
+    when they say "the Thursday of next week".
+    """
+    monday_this_week = today - datetime.timedelta(days=today.weekday())
+    return monday_this_week + datetime.timedelta(days=7 + target)
+
+
 def _rolled(today, day, month):
     """`day`/`month` this year, or next year if that date has already passed."""
     candidate = datetime.date(today.year, month, day)
@@ -101,8 +115,12 @@ def _cases(today):
          'Mathematical Methods', _next_weekday(today, FRI)),
         ('eng essay due monday',
          'English', _next_weekday(today, MON)),
+        # "next thursday" means next week's, not the soonest one. The
+        # expectation used to read _next_weekday(today, THU), which matched the
+        # parser only because the parser was discarding the word "next" - the
+        # test and the bug agreed with each other. Beta tester U01 found it.
         ('english oral presentation next thursday',
-         'English', _next_weekday(today, THU)),
+         'English', _next_week_weekday(today, THU)),
         ('bio prac next tuesday',
          'Biology', _next_weekday(today, TUE)),
         ('spesh homework due wednesday',

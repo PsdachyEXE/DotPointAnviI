@@ -436,6 +436,114 @@ def suite_type_vocabulary(results):
                   "'moral' does not fire the 'oral' keyword")
 
 
+def suite_past_date_rollforward(results):
+    """A date that has already passed is rolled forward, and SAYS so (R1).
+
+    Beta testing found this: "English essay due 12/09" typed on 15 Sep 2026 was
+    stored as 12 Sep 2027 - 362 days out, banded 'distant', at the bottom of the
+    list in grey - and the one item that was genuinely late was the one the
+    screen was quietest about. The rule itself is deliberate and documented; it
+    is the silence that was the defect, so what is asserted here is the
+    PROVENANCE STRING, not the date. Both testers reported it independently.
+    """
+    _signed_in()
+    today = datetime.date.today()
+
+    # The rule has no lower bound: a date three days old rolls as far as one
+    # months old. Offsets are clamped inside the CURRENT calendar year on
+    # purpose - a bare DD/MM carries no year, so "300 days ago" re-read in this
+    # year can land in the future and correctly not roll at all. Writing the
+    # test without that constraint is how this suite first failed.
+    days_into_year = (today - datetime.date(today.year, 1, 1)).days
+    offsets = [o for o in (3, 30, 200) if 0 < o < days_into_year] or [1]
+    for offset in offsets:
+        past = today - datetime.timedelta(days=offset)
+        assert past.year == today.year
+        sentence = 'English essay due %02d/%02d worth 20%%' % (past.day, past.month)
+        parsed = nlp.parse_text(sentence)
+        why = (parsed.get('why') or {}).get('due_date', '')
+        results.ok('already passed' in why,
+                   'a date %d days old reports that it was rolled (%r)'
+                   % (offset, why))
+        got = _fields(parsed).get('due_date')
+        results.equal(got.year, past.year + 1,
+                      'a date %d days old resolves to next year' % offset)
+
+    # A FUTURE date must not claim to have been rolled - the message would be
+    # false, and a warning that fires when nothing happened is worse than none.
+    future = today + datetime.timedelta(days=20)
+    parsed = nlp.parse_text('English essay due %02d/%02d worth 20%%'
+                            % (future.day, future.month))
+    why = (parsed.get('why') or {}).get('due_date', '')
+    results.ok('already passed' not in why,
+               'a future date does not claim to have been rolled (%r)' % why)
+
+    # An explicit year is honoured and never rolled, past or not.
+    parsed = nlp.parse_text('English essay due 12/09/2020')
+    got = _fields(parsed).get('due_date')
+    results.equal(got, datetime.date(2020, 9, 12),
+                  'an explicit year is kept even when it is in the past')
+    results.ok('already passed' not in ((parsed.get('why') or {}).get('due_date', '')),
+               'an explicit past year is not reported as a roll')
+
+    # Month-name dates roll through two other branches. They must explain
+    # themselves in the same words, or the parser describes one decision three
+    # different ways depending on how the student happened to type it.
+    past = today - datetime.timedelta(days=30)
+    month_name = past.strftime('%B').lower()
+    for sentence in ('English essay due %d %s' % (past.day, month_name),
+                     'English essay due %s %d' % (month_name, past.day)):
+        why = (nlp.parse_text(sentence).get('why') or {}).get('due_date', '')
+        results.ok('already passed' in why,
+                   'month-name form reports the roll too: %r' % sentence)
+
+
+def suite_next_weekday_modifier(results):
+    """'next friday' is next week's; 'this friday' and a bare 'friday' are not (R2).
+
+    The modifier used to sit in a non-capturing group, so all three phrasings
+    resolved to the soonest occurrence and a student who wrote "next" got a
+    deadline a week early, silently and at unchanged confidence. Found by beta
+    tester U01, who caught it only because they were checking.
+
+    Every expectation below is computed from the MEANING - counted from the
+    Monday of the current week - and never by calling the parser's own helper,
+    because an expectation borrowed from the code under test cannot fail.
+    """
+    _signed_in()
+    today = datetime.date.today()
+    monday_this_week = today - datetime.timedelta(days=today.weekday())
+
+    for name, wd in (('monday', 0), ('thursday', 3), ('friday', 4)):
+        expected_next_week = monday_this_week + datetime.timedelta(days=7 + wd)
+        got = _fields(nlp.parse_text('English essay due next %s' % name)).get('due_date')
+        results.equal(got, expected_next_week,
+                      "'next %s' is the %s of next week" % (name, name))
+
+        # 'this' and a bare weekday keep the original reading: the soonest one,
+        # never today. Changing those was never the intent.
+        ahead = (wd - today.weekday()) % 7 or 7
+        soonest = today + datetime.timedelta(days=ahead)
+        for phrasing in ('this %s' % name, name):
+            got = _fields(nlp.parse_text('English essay due %s' % phrasing)).get('due_date')
+            results.equal(got, soonest,
+                          "'%s' still means the soonest %s" % (phrasing, name))
+
+    # The three readings must not all collapse together again, which is the
+    # regression itself rather than any one date being wrong.
+    nxt = _fields(nlp.parse_text('English essay due next friday')).get('due_date')
+    bare = _fields(nlp.parse_text('English essay due friday')).get('due_date')
+    results.ok(nxt != bare,
+               "'next friday' and a bare 'friday' no longer resolve to one day")
+    results.equal((nxt - bare).days, 7,
+                  "'next friday' is exactly a week after the bare reading")
+
+    # The student is told which reading was taken.
+    why = (nlp.parse_text('English essay due next friday').get('why') or {}).get('due_date', '')
+    results.ok('next week' in why,
+               "the provenance line names the reading it took (%r)" % why)
+
+
 SUITES = [
     ('accuracy unchanged', suite_still_parses),
     ('unbounded day counts', suite_unbounded_day_counts),
@@ -446,4 +554,6 @@ SUITES = [
     ('corrupt school terms', suite_corrupt_school_terms),
     ('corrupt subjects', suite_corrupt_subjects),
     ('type vocabulary (NFR04)', suite_type_vocabulary),
+    ('past-date roll-forward (R1)', suite_past_date_rollforward),
+    ('next-weekday modifier (R2)', suite_next_weekday_modifier),
 ]
