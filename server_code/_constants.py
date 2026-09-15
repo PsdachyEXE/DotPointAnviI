@@ -404,12 +404,42 @@ AMBIGUOUS_BARE_ALIASES = frozenset((
 # to the dropdown, the dashboard filters and VALID_TYPES before a single row
 # could store it.
 #
+# THE SECOND GROUP UNDER 'project' NAMES THE FORM OF THE WORK, NOT ITS CATEGORY.
+# NFR04 asks the parser for "a usable record (subject + due_date + type
+# detected)". Measured over the committed 30-sentence accuracy set on 15 Sep
+# 2026, subject landed 30/30 and due date 30/30, but a type keyword fired on only
+# 22/30 — so the requirement's own three-field test held on 22 of 30. All eight
+# misses were the same shape: 'eng essay due monday', 'swd folio due thursday',
+# 'psych research report in 21 days'. The vocabulary covered the words a maths or
+# science student writes and missed the words a humanities student writes, so the
+# sentences most likely to fail were exactly the ones the client's own subjects
+# produce.
+#
+# essay, report, folio, portfolio, oral and presentation are not VCE assessment
+# categories — the categories are SAC, SAT and exam, and they are already here.
+# These six describe what the student physically produces, which is what
+# 'project' already meant when it took 'assignment', 'prac' and 'practical'.
+# Filing them there is a deliberate approximation and the preview lets the
+# student correct it before anything is written.
+#
+# They sit LAST, and 'project' sits fourth, so precedence does the rest: a
+# sentence naming a real category still gets it. "English essay SAC" is a SAC,
+# because 'sac' fires two keys earlier. Only a sentence that names no category at
+# all falls through to the form word — which is precisely the sentence that used
+# to get nothing.
+#
+# 'portfolio' is listed separately from 'folio' rather than relied upon as a
+# substring: _match_type anchors every keyword with \b, and the 't' before
+# 'folio' in 'portfolio' is a word character, so there is no boundary there and
+# 'folio' alone would never fire on it.
+#
 # READ BY: nlp._match_type only.
 TYPE_KEYWORDS = {
     'sac': ['sac', 'school assessed coursework'],
     'sat': ['sat', 'school assessed task'],
     'exam': ['exam', 'examination', 'test'],
-    'project': ['project', 'assignment', 'prac', 'practical'],
+    'project': ['project', 'assignment', 'prac', 'practical',
+                'essay', 'report', 'folio', 'portfolio', 'oral', 'presentation'],
     'homework': ['homework', 'hw'],
     'other': [],
 }

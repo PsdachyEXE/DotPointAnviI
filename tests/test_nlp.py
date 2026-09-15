@@ -386,6 +386,56 @@ def suite_corrupt_subjects(results):
                   'bare "maths" resolves to the student\'s own maths study')
 
 
+def suite_type_vocabulary(results):
+    """The words a humanities student writes must be read as a type (NFR04).
+
+    NFR04 asks the parser for "a usable record (subject + due_date + type
+    detected)". Measured over the 30-sentence accuracy set on 15 Sep 2026,
+    subject and due date each landed 30/30 but a type keyword fired on only
+    22/30, so the requirement's own three-field test held on 22 of 30. Every one
+    of the eight misses used a word describing the FORM of the work - essay,
+    oral, presentation, folio, report - none of which was in TYPE_KEYWORDS.
+
+    Two things are asserted here, and the second matters more than the first.
+    One: each of those words now fires. Two: adding them did not cost the
+    precedence rule, so a sentence that also names a real VCE category still
+    gets the category. Without the fix the first group fails; without the
+    ordering the second does.
+    """
+    _signed_in()
+
+    # 1. The form words fire, and 'why' carries the token - which is what the
+    #    confidence score reads. Testing type_value alone would pass even when
+    #    nothing matched, because 'other' is the fallback for every sentence.
+    for sentence, token in (
+            ('eng essay due monday', 'essay'),
+            ('english oral presentation next thursday', 'oral'),
+            ('swd folio due thursday', 'folio'),
+            ('swd portfolio due thursday', 'portfolio'),
+            ('psych research report in 21 days', 'report'),
+    ):
+        parsed = nlp.parse_text(sentence)
+        results.equal(_fields(parsed).get('type'), 'project',
+                      '%r is typed as a project' % sentence)
+        results.ok(token in (parsed.get('why') or {}).get('type', ''),
+                   '%r records %r as the token that fired' % (sentence, token))
+
+    # 2. Precedence survives. 'project' is the fourth key, so a sentence naming a
+    #    category is still filed under the category - the form word never wins.
+    #    This is the assertion that would fail if the six words were prepended,
+    #    or if TYPE_KEYWORDS were ever re-sorted into alphabetical order.
+    results.equal(_fields(nlp.parse_text('english essay sac due monday')).get('type'),
+                  'sac', 'a named SAC beats the form of the work')
+    results.equal(_fields(nlp.parse_text('literature oral exam on friday')).get('type'),
+                  'exam', 'a named exam beats the form of the work')
+
+    # 3. A word boundary is still required, so a form word buried inside a longer
+    #    word does not fire. 'moral' is the trap 'oral' introduces.
+    parsed = nlp.parse_text('philosophy moral dilemmas due friday')
+    results.equal((parsed.get('why') or {}).get('type'), None,
+                  "'moral' does not fire the 'oral' keyword")
+
+
 SUITES = [
     ('accuracy unchanged', suite_still_parses),
     ('unbounded day counts', suite_unbounded_day_counts),
@@ -395,4 +445,5 @@ SUITES = [
     ('term week dates', suite_term_week_dates),
     ('corrupt school terms', suite_corrupt_school_terms),
     ('corrupt subjects', suite_corrupt_subjects),
+    ('type vocabulary (NFR04)', suite_type_vocabulary),
 ]
